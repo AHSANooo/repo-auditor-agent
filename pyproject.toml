@@ -1,0 +1,137 @@
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-auditor"
+version = "0.1.0"
+description = "Autonomous AI Agent for DevOps Repository Auditing — zero-framework, production-grade"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "AHSANooo" }]
+keywords = ["devops", "security", "ai-agent", "audit", "mlops", "react-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Security",
+]
+dependencies = [
+    "openai>=1.40.0",
+    "pydantic>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-mock>=3.14.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "bandit>=1.7.0",
+    "pip-audit>=2.7.0",
+    "pre-commit>=3.7.0",
+]
+
+[project.scripts]
+devops-auditor = "devops_auditor.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AHSANooo/repo-auditor-agent"
+Repository = "https://github.com/AHSANooo/repo-auditor-agent"
+Issues = "https://github.com/AHSANooo/repo-auditor-agent/issues"
+
+# ============================================================
+# Setuptools package discovery
+# ============================================================
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ============================================================
+# Ruff — Linting & Formatting (replaces flake8, black, isort)
+# ============================================================
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit (security)
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "B008",   # do not perform function calls in default argument
+    "S101",   # use of assert — acceptable in tests
+    "S603",   # subprocess call — we use secure list-based calls intentionally
+    "S607",   # partial path — mitigated by our path sandboxing
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S106"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ============================================================
+# Mypy — Strict Static Typing
+# ============================================================
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ============================================================
+# Pytest — Testing Configuration
+# ============================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+]
+markers = [
+    "integration: marks tests that require network access or real API keys",
+    "slow: marks tests that take significant time",
+]
+
+[tool.coverage.run]
+source = ["src/devops_auditor"]
+omit = ["tests/*", "*/conftest.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+# ============================================================
+# Bandit — Security Linting
+# ============================================================
+[tool.bandit]
+targets = ["src"]
+skips = ["B101", "B603", "B607"]
