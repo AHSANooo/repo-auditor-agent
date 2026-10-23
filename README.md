@@ -15,7 +15,7 @@
 
 Built with a **zero-framework native ReAct tool-calling loop** — no LangChain, no LangGraph, no CrewAI.
 Just clean Python, the OpenAI SDK, and defense-in-depth security engineering.
-Default provider: **Google Gemini** (`gemini-2.0-flash`) via the OpenAI-compatible endpoint.
+Default provider: **Google Gemini** (`gemini-3.5-flash-lite`) via the OpenAI-compatible endpoint.
 
 [Quickstart](#-quickstart) · [Architecture](#-architecture) · [Features](#-features) · [Sample Output](#-sample-output) · [Docker](#-docker) · [Contributing](#-contributing)
 
@@ -143,7 +143,10 @@ source .venv/bin/activate
 # Windows:
 .\.venv\Scripts\activate
 
+# Either install the package in editable mode:
 pip install -e .
+# Or install via requirements.txt:
+pip install -r requirements.txt
 ```
 
 ### 2. Configure API Key
@@ -157,10 +160,10 @@ cp .env.example .env
 
 | Provider | `OPENAI_BASE_URL` | Recommended `AUDIT_MODEL` |
 |----------|-------------------|---------------------------|
-| **Google Gemini (default)** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.0-flash` |
+| **Google Gemini (default)** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-3.5-flash-lite` |
 | OpenAI | *(not set)* | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
+| Groq | `https://api.groq.com/openai/v1` | `qwen/qwen3.8-27b` |
 | Ollama (local) | `http://localhost:11434/v1` | `llama3.1` |
 
 ### 3. Run the Audit
@@ -180,7 +183,7 @@ cat report.json
 
 ```bash
 # Use a specific model
-python agent.py --repo <url> --output report.json --model gemini-2.0-flash
+python agent.py --repo <url> --output report.json --model gemini-3.5-flash-lite
 
 # Increase iterations for thorough analysis of large repos
 python agent.py --repo <url> --output report.json --max-iterations 30
