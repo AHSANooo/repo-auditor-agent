@@ -1,0 +1,97 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run weekly on Monday at 08:00 UTC to catch newly disclosed CVEs
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: read
+  security-events: write    # Required for SARIF upload
+
+jobs:
+  bandit:
+    name: Bandit — Static Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Bandit
+        run: pip install "bandit[toml]>=1.7.0"
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r src/ \
+            -c pyproject.toml \
+            -f json \
+            -o bandit-report.json \
+            --exit-zero
+
+      - name: Upload Bandit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-security-report
+          path: bandit-report.json
+          retention-days: 30
+
+  pip-audit:
+    name: pip-audit — Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install pip-audit
+        run: pip install pip-audit>=2.7.0
+
+      - name: Install project dependencies
+        run: pip install -e .
+
+      - name: Run pip-audit
+        run: |
+          pip-audit \
+            --desc \
+            --format json \
+            --output pip-audit-report.json \
+            || true    # Don't fail CI — report as artifact for review
+
+      - name: Upload pip-audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-vulnerability-report
+          path: pip-audit-report.json
+          retention-days: 30
+
+  secret-scan:
+    name: Detect Secrets — Credential Leak Prevention
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # Full history for secret scanning
+
+      - name: Run TruffleHog — OSS secret scanner
+        uses: trufflesecurity/trufflehog@v3.82.6
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
