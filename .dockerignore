@@ -1,0 +1,47 @@
+# Ignore Python artifacts in Docker build context
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Development and test artifacts
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment files — never copy into container
+.env
+.env.*
+!.env.example
+
+# Version control
+.git/
+.gitignore
+
+# Editor and OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# CI artifacts
+.github/
+
+# Report output files
+report_*.json
+/report.json
+
+# Assignment PDF
+*.pdf
+
+# Temporary auditor clones (should not exist at build time)
+auditor_*/
