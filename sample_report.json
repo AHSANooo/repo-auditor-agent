@@ -1,0 +1,105 @@
+{
+  "repository": "https://github.com/example/deliberately-vulnerable-demo",
+  "violations": [
+    {
+      "rule_id": "SEC-001",
+      "category": "security",
+      "severity": "critical",
+      "file": "config/settings.py",
+      "line": 14,
+      "description": "AWS Access Key ID hardcoded directly in source file",
+      "evidence": "AWS_ACCESS_KEY_ID = '[REDACTED_AWS_ACCESS_KEY]'",
+      "recommendation": "Remove the key immediately, rotate it in AWS IAM, and use environment variables or AWS Secrets Manager instead. Add 'config/settings.py' to .gitignore if it contains local overrides."
+    },
+    {
+      "rule_id": "SEC-002",
+      "category": "security",
+      "severity": "critical",
+      "file": ".env",
+      "line": null,
+      "description": ".env file with production secrets is tracked in version control",
+      "evidence": "File '.env' appears in git-tracked file listing — contains DATABASE_URL and API credentials.",
+      "recommendation": "Immediately remove .env from git history using 'git filter-repo' or BFG Repo Cleaner. Add '.env' to .gitignore. Rotate all credentials that were exposed."
+    },
+    {
+      "rule_id": "CI-001",
+      "category": "github_actions_ci",
+      "severity": "high",
+      "file": ".github/workflows/deploy.yml",
+      "line": 8,
+      "description": "GitHub Action pinned to mutable 'main' branch ref instead of a commit SHA",
+      "evidence": "uses: org/some-action@main",
+      "recommendation": "Pin actions to an immutable commit SHA (e.g., uses: org/some-action@abc1234) to prevent supply-chain attacks from action maintainers pushing malicious code."
+    },
+    {
+      "rule_id": "CI-002",
+      "category": "github_actions_ci",
+      "severity": "high",
+      "file": ".github/workflows/ci.yml",
+      "line": 4,
+      "description": "Workflow uses 'permissions: write-all' granting unnecessary broad write access",
+      "evidence": "permissions: write-all",
+      "recommendation": "Apply the principle of least privilege. Specify only the minimal required permissions (e.g., 'contents: read') and grant write only to specific scopes that require it."
+    },
+    {
+      "rule_id": "DEP-001",
+      "category": "dependency_management",
+      "severity": "high",
+      "file": "requirements.txt",
+      "line": 3,
+      "description": "Production dependency 'flask' is unpinned — any version will be installed",
+      "evidence": "flask",
+      "recommendation": "Pin all production dependencies to exact versions (e.g., flask==3.0.3) and generate a lockfile. Use 'pip freeze > requirements.txt' or migrate to pyproject.toml with poetry.lock."
+    },
+    {
+      "rule_id": "HYGN-001",
+      "category": "repository_hygiene",
+      "severity": "medium",
+      "file": "node_modules/lodash/package.json",
+      "line": null,
+      "description": "node_modules/ directory committed to version control",
+      "evidence": "File 'node_modules/lodash/package.json' found in git-tracked listing.",
+      "recommendation": "Remove node_modules/ from git tracking: 'git rm -r --cached node_modules'. Add 'node_modules/' to .gitignore. Dependencies should be installed via 'npm install', not committed."
+    },
+    {
+      "rule_id": "HYGN-002",
+      "category": "repository_hygiene",
+      "severity": "low",
+      "file": ".DS_Store",
+      "line": null,
+      "description": "macOS .DS_Store metadata file committed to repository",
+      "evidence": "File '.DS_Store' appears in git file listing.",
+      "recommendation": "Remove with 'git rm --cached .DS_Store' and add '.DS_Store' to .gitignore. Consider adding a global gitignore: git config --global core.excludesfile ~/.gitignore_global"
+    },
+    {
+      "rule_id": "TEST-001",
+      "category": "testing",
+      "severity": "medium",
+      "file": ".github/workflows/ci.yml",
+      "line": 22,
+      "description": "CI pipeline explicitly skips the test suite with '--co' (collect-only) flag",
+      "evidence": "run: pytest --co -q",
+      "recommendation": "Remove the '--co' flag to actually execute tests. '--co' only collects but does not run them. A CI that skips tests provides no safety net."
+    },
+    {
+      "rule_id": "COLLAB-001",
+      "category": "collaboration",
+      "severity": "low",
+      "file": null,
+      "line": null,
+      "description": "Repository has no LICENSE file — all code is implicitly 'All Rights Reserved'",
+      "evidence": "No LICENSE, LICENSE.md, or LICENSE.txt file found in repository root.",
+      "recommendation": "Add an appropriate open source license (e.g., MIT, Apache 2.0) to clarify usage rights. Without a license, contributors and users cannot legally use or contribute to the project."
+    },
+    {
+      "rule_id": "CFG-001",
+      "category": "configuration",
+      "severity": "medium",
+      "file": "src/database.py",
+      "line": 7,
+      "description": "Hardcoded absolute OS-specific path to local development database file",
+      "evidence": "DB_PATH = '/Users/john.doe/projects/myapp/data/dev.sqlite3'",
+      "recommendation": "Replace hardcoded paths with relative paths or environment variables: DB_PATH = os.environ.get('DB_PATH', 'data/dev.sqlite3'). This prevents failures on other developers' machines and in CI."
+    }
+  ]
+}
