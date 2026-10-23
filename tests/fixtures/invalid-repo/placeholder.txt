@@ -1,0 +1,2 @@
+This repo has no standard DevOps structure.
+No README, no LICENSE, no CI, no tests.

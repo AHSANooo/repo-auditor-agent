@@ -199,22 +199,34 @@ class DevOpsAuditAgent:
             assistant_msg: ChatCompletionMessage = response.choices[0].message
 
             # Convert to dict for appending to message history
-            assistant_dict: dict[str, Any] = {
-                "role": "assistant",
-                "content": assistant_msg.content or "",
-            }
-            if assistant_msg.tool_calls:
-                assistant_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": cast(Any, tc).function.name,
-                            "arguments": cast(Any, tc).function.arguments,
-                        },
-                    }
-                    for tc in assistant_msg.tool_calls
-                ]
+            # If the response object supports model_dump (real SDK message), preserve all
+            # provider-specific metadata (e.g. Google thought_signature for multi-turn tools).
+            assistant_dict: dict[str, Any] | None = None
+            if hasattr(assistant_msg, "model_dump") and not hasattr(assistant_msg, "_mock_methods"):
+                try:
+                    dumped = assistant_msg.model_dump(exclude_unset=True)
+                    if isinstance(dumped, dict):
+                        assistant_dict = dumped
+                except Exception:
+                    assistant_dict = None
+
+            if assistant_dict is None:
+                assistant_dict = {
+                    "role": "assistant",
+                    "content": assistant_msg.content or "",
+                }
+                if assistant_msg.tool_calls:
+                    assistant_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": cast(Any, tc).function.name,
+                                "arguments": cast(Any, tc).function.arguments,
+                            },
+                        }
+                        for tc in assistant_msg.tool_calls
+                    ]
             messages.append(assistant_dict)
 
             # ── No Tool Calls → LLM Finished Without Submitting ─────────────

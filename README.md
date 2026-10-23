@@ -9,11 +9,13 @@
 [![Type Checked: Mypy](https://img.shields.io/badge/type%20checked-mypy%20strict-blue.svg)](https://mypy-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Zero Frameworks](https://img.shields.io/badge/agent%20framework-none%20%E2%80%94%20native%20ReAct-green.svg)](#architecture)
+[![Changelog](https://img.shields.io/badge/changelog-keep%20a%20changelog-orange.svg)](./CHANGELOG.md)
 
 **An autonomous AI agent that audits GitHub repositories for DevOps and security defects.**
 
 Built with a **zero-framework native ReAct tool-calling loop** — no LangChain, no LangGraph, no CrewAI.
 Just clean Python, the OpenAI SDK, and defense-in-depth security engineering.
+Default provider: **Google Gemini** (`gemini-2.0-flash`) via the OpenAI-compatible endpoint.
 
 [Quickstart](#-quickstart) · [Architecture](#-architecture) · [Features](#-features) · [Sample Output](#-sample-output) · [Docker](#-docker) · [Contributing](#-contributing)
 
@@ -107,16 +109,17 @@ The agent implements a native **ReAct (Reason + Act)** loop — the same fundame
 ## ✨ Features
 
 - **🧠 Native ReAct Loop** — autonomous multi-step investigation, up to 20 configurable iterations
-- **🌐 Multi-Provider LLM** — works with OpenAI, Google Gemini, DeepSeek, Groq, or local Ollama via a single env var
+- **🌐 Multi-Provider LLM** — works with Google Gemini (default), OpenAI, DeepSeek, Groq, or local Ollama via a single env var
 - **🔐 Defense-in-Depth Security**:
   - Path traversal prevention on all file reads
   - Multi-pattern regex credential scrubbing (AWS, GitHub, JWT, RSA keys)
   - Secret-safe logging via `RedactionLoggingFilter`
   - Pydantic evidence field validator as final backstop
 - **📋 Strict Output Contract** — Pydantic V2 models enforce every field type, `null` serialization, and rule_id format
-- **🧪 84+ Unit Tests** — zero API calls, mocked LLM responses, >80% coverage
+- **🧪 122+ Unit Tests** — zero API calls, mocked LLM responses, >80% coverage, 3 synthetic fixture repos
 - **🐳 Production Docker** — multi-stage build, non-root user, OCI labels
 - **🔄 Full CI/CD** — lint, format, mypy strict, pytest matrix (3.10, 3.11, 3.12), Bandit, pip-audit, TruffleHog
+- **🔒 Supply-Chain Hardened** — all GitHub Actions pinned to immutable commit SHAs
 
 ---
 
@@ -150,21 +153,24 @@ cp .env.example .env
 # Edit .env and set your OPENAI_API_KEY
 ```
 
-**Supported providers** (set `OPENAI_BASE_URL` to switch):
+**Default provider: Google Gemini** (recommended for best tool-calling and context window)
 
-| Provider | `OPENAI_BASE_URL` | Notes |
-|----------|-------------------|-------|
-| OpenAI (default) | *(not set)* | Requires `OPENAI_API_KEY` |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | Set `AUDIT_MODEL=gemini-1.5-pro` |
-| DeepSeek | `https://api.deepseek.com/v1` | Set `AUDIT_MODEL=deepseek-chat` |
-| Groq | `https://api.groq.com/openai/v1` | Set `AUDIT_MODEL=llama-3.1-70b-versatile` |
-| Ollama (local) | `http://localhost:11434/v1` | Set `AUDIT_MODEL=llama3.1` |
+| Provider | `OPENAI_BASE_URL` | Recommended `AUDIT_MODEL` |
+|----------|-------------------|---------------------------|
+| **Google Gemini (default)** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `gemini-2.0-flash` |
+| OpenAI | *(not set)* | `gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Groq | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
+| Ollama (local) | `http://localhost:11434/v1` | `llama3.1` |
 
 ### 3. Run the Audit
 
 ```bash
 # Audit any public GitHub repository
 python agent.py --repo https://github.com/pallets/flask --output report.json
+
+# Alternative: use the installed CLI entrypoint (after pip install -e .)
+devops-auditor --repo https://github.com/pallets/flask --output report.json
 
 # View the structured report
 cat report.json
@@ -174,14 +180,19 @@ cat report.json
 
 ```bash
 # Use a specific model
-python agent.py --repo <url> --output report.json --model gpt-4o
+python agent.py --repo <url> --output report.json --model gemini-2.0-flash
 
 # Increase iterations for thorough analysis of large repos
 python agent.py --repo <url> --output report.json --max-iterations 30
 
+# Check installed version
+python agent.py --version
+
 # Debug logging
 LOG_LEVEL=DEBUG python agent.py --repo <url> --output report.json
 ```
+
+> **Exit Codes**: `0` = success · `1` = usage/env error · `2` = network/clone error · `3` = internal error
 
 ---
 
@@ -296,9 +307,13 @@ pre-commit install
 ```text
 repo-auditor-agent/
 ├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.md       # Bug report template
+│   │   └── feature_request.md  # Feature request template
+│   ├── pull_request_template.md # PR checklist with security section
 │   └── workflows/
-│       ├── ci.yml              # Lint, type-check, pytest matrix (3.10–3.12)
-│       └── security.yml        # Bandit, pip-audit, TruffleHog
+│       ├── ci.yml              # Lint, type-check, pytest matrix (3.10–3.12) — SHA-pinned
+│       └── security.yml        # Bandit, pip-audit, TruffleHog — SHA-pinned
 ├── src/
 │   └── devops_auditor/
 │       ├── __init__.py
@@ -310,19 +325,29 @@ repo-auditor-agent/
 │       ├── schemas.py          # Pydantic V2 output contract models
 │       └── tools.py            # Sandboxed inspection tools
 ├── tests/
+│   ├── fixtures/
+│   │   ├── clean-repo/         # Synthetic clean repo (zero violations expected)
+│   │   ├── vulnerable-repo/    # Synthetic repo with 9 planted violations
+│   │   └── invalid-repo/       # Minimal broken repo (missing README, LICENSE, CI)
+│   ├── conftest.py             # Shared fixture helpers (clean/vulnerable/invalid paths)
 │   ├── test_agent.py           # LLM mock tests — zero API calls
 │   ├── test_cli.py             # CLI runner, argument parsing, & error handling
+│   ├── test_fixtures.py        # Fixture-based integration tests (20 tests)
 │   ├── test_redactor.py        # Credential masking verification
 │   ├── test_repo_manager.py    # Isolated shallow clone & cleanup lifecycle
 │   ├── test_schemas.py         # JSON schema contract validation
 │   └── test_tools.py           # Sandboxing & tool unit tests
-├── .env.example                # Environment template
+├── .env.example                # Environment template (Gemini configured as default)
 ├── .pre-commit-config.yaml     # Ruff, Mypy, Bandit, secret detection
 ├── agent.py                    # Root CLI shim (assignment contract)
+├── CHANGELOG.md                # Keep a Changelog format
+├── CODE_OF_CONDUCT.md          # Contributor Covenant v2.1
 ├── Dockerfile                  # Multi-stage non-root container
 ├── LICENSE                     # MIT
 ├── pyproject.toml              # PEP 621 packaging + tool configuration
+├── README.md                   # This file
 ├── sample_report.json          # Verified example audit output
+├── SECURITY.md                 # Responsible disclosure policy
 └── tools.py                    # Root tools shim
 ```
 

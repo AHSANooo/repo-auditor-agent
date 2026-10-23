@@ -5,15 +5,21 @@ Invocation (as required by the assignment spec):
     python agent.py --repo <github_url> --output <report.json>
 
 Features:
-- Rich terminal progress output during the audit (suppressed when output is a pipe)
 - Structured JSON written atomically to the output path
-- Exits 0 on success, 1 on any fatal error
+- Exits with differentiated codes for precise error classification
 - Configures logging from LOG_LEVEL environment variable
+
+Exit Codes:
+    0  (EX_OK)      Audit completed successfully
+    1  (EX_USAGE)   Invalid arguments or missing environment variables
+    2  (EX_NETWORK) Repository clone failed (network / git error, timeout)
+    3  (EX_SCHEMA)  Unexpected internal error (schema validation, etc.)
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import logging
 import os
@@ -30,6 +36,13 @@ from devops_auditor.tools import InspectionTools
 # Load .env from the project root — must be called at module level so env vars are
 # available before any function that reads them is invoked.
 load_dotenv()
+
+# ─── Exit Code Constants ─────────────────────────────────────────────────────
+
+EX_OK = 0  # Audit completed successfully
+EX_USAGE = 1  # Invalid arguments or missing environment variables
+EX_NETWORK = 2  # Clone failed (git error, timeout, unreachable host)
+EX_SCHEMA = 3  # Unexpected internal error (schema, unexpected exception)
 
 # ─── Logging Configuration ───────────────────────────────────────────────────
 
@@ -99,8 +112,21 @@ Environment variables:
         metavar="N",
         help="Maximum ReAct iterations. Overrides MAX_ITERATIONS.",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_get_version()}",
+    )
 
     return parser.parse_args(argv)
+
+
+def _get_version() -> str:
+    """Read package version from installed metadata (set in pyproject.toml)."""
+    try:
+        return importlib.metadata.version("devops-auditor")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0+unknown"
 
 
 def _validate_environment() -> None:
@@ -110,7 +136,7 @@ def _validate_environment() -> None:
             "ERROR: OPENAI_API_KEY environment variable is not set.\n"
             "Set it in your .env file or export it before running.\n"
         )
-        sys.exit(1)
+        sys.exit(EX_USAGE)
 
 
 def _write_report(report_data: dict[str, Any], output_path: str) -> None:
@@ -170,21 +196,23 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Audit complete. %d violations written to: %s", violation_count, args.output)
         print(f"✓ Audit complete: {violation_count} violation(s) found → {args.output}")
 
-        return 0
+        return EX_OK
 
     except TimeoutError as exc:
+        # EX_NETWORK — clone timed out (unreachable host or very slow repo)
         sys.stderr.write(f"TIMEOUT: {exc}\n")
-        return 1
+        return EX_NETWORK
     except RuntimeError as exc:
+        # EX_NETWORK — git clone failed (bad URL, auth error, etc.)
         sys.stderr.write(f"ERROR: {exc}\n")
-        return 1
+        return EX_NETWORK
     except KeyboardInterrupt:
         sys.stderr.write("\nAborted by user.\n")
-        return 1
+        return EX_USAGE
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unexpected fatal error during audit")
         sys.stderr.write(f"FATAL: {exc}\n")
-        return 1
+        return EX_SCHEMA
 
 
 if __name__ == "__main__":
