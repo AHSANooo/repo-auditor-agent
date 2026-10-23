@@ -1,0 +1,6 @@
+# Core runtime dependencies for DevOps Repository Auditor Agent
+# Install with: pip install -r requirements.txt
+openai>=1.40.0
+pydantic>=2.7.0
+python-dotenv>=1.0.0
+rich>=13.7.0
