@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+# AUDIT TRIGGER CI-002: permissions: write-all
+permissions: write-all
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # AUDIT TRIGGER CI-001: mutable @main ref (not SHA-pinned)
+      - uses: actions/checkout@main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      # AUDIT TRIGGER TEST-001: pytest with --co (collect-only, skips execution)
+      - run: pytest --co -q

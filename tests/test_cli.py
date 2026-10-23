@@ -10,7 +10,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from devops_auditor.cli import _parse_args, _validate_environment, _write_report, main
+from devops_auditor.cli import (
+    EX_NETWORK,
+    EX_OK,
+    EX_SCHEMA,
+    EX_USAGE,
+    _parse_args,
+    _validate_environment,
+    _write_report,
+    main,
+)
 
 
 class TestCLIArgumentParsing:
@@ -47,7 +56,7 @@ class TestCLIValidation:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with pytest.raises(SystemExit) as exc_info:
             _validate_environment()
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == EX_USAGE
 
     def test_present_api_key_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "test-key-123")
@@ -96,11 +105,11 @@ class TestCLIMain:
         mock_agent_cls.return_value = mock_agent_instance
 
         ret = main(["--repo", "https://github.com/org/repo", "--output", str(out_file)])
-        assert ret == 0
+        assert ret == EX_OK
         assert out_file.exists()
 
     @patch("devops_auditor.cli.clone_repository")
-    def test_main_timeout_returns_1(
+    def test_main_timeout_returns_ex_network(
         self,
         mock_clone: MagicMock,
         tmp_path: Path,
@@ -111,10 +120,10 @@ class TestCLIMain:
 
         out = str(tmp_path / "out.json")
         ret = main(["--repo", "https://github.com/org/repo", "--output", out])
-        assert ret == 1
+        assert ret == EX_NETWORK
 
     @patch("devops_auditor.cli.clone_repository")
-    def test_main_runtime_error_returns_1(
+    def test_main_runtime_error_returns_ex_network(
         self,
         mock_clone: MagicMock,
         tmp_path: Path,
@@ -125,10 +134,10 @@ class TestCLIMain:
 
         out = str(tmp_path / "out.json")
         ret = main(["--repo", "https://github.com/org/repo", "--output", out])
-        assert ret == 1
+        assert ret == EX_NETWORK
 
     @patch("devops_auditor.cli.clone_repository")
-    def test_main_keyboard_interrupt_returns_1(
+    def test_main_keyboard_interrupt_returns_ex_usage(
         self,
         mock_clone: MagicMock,
         tmp_path: Path,
@@ -139,10 +148,10 @@ class TestCLIMain:
 
         out = str(tmp_path / "out.json")
         ret = main(["--repo", "https://github.com/org/repo", "--output", out])
-        assert ret == 1
+        assert ret == EX_USAGE
 
     @patch("devops_auditor.cli.clone_repository")
-    def test_main_unexpected_error_returns_1(
+    def test_main_unexpected_error_returns_ex_schema(
         self,
         mock_clone: MagicMock,
         tmp_path: Path,
@@ -153,4 +162,4 @@ class TestCLIMain:
 
         out = str(tmp_path / "out.json")
         ret = main(["--repo", "https://github.com/org/repo", "--output", out])
-        assert ret == 1
+        assert ret == EX_SCHEMA
