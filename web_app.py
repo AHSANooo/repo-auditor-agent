@@ -16,16 +16,30 @@ import sys
 from pathlib import Path
 
 import streamlit as st
-from dotenv import load_dotenv
 
 # Ensure src is on sys.path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from devops_auditor.agent import DevOpsAuditAgent
-from devops_auditor.repo_manager import clone_repository
-from devops_auditor.tools import InspectionTools
+try:
+    from dotenv import load_dotenv
 
-load_dotenv()
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
+    from devops_auditor.agent import DevOpsAuditAgent
+    from devops_auditor.repo_manager import clone_repository
+    from devops_auditor.tools import InspectionTools
+except ImportError as err:
+    st.error(
+        f"⚠️ Missing required dependencies: `{err}`\n\n"
+        "Please install the dependencies in your active environment:\n"
+        "```bash\n"
+        "pip install -r requirements.txt\n"
+        "```"
+    )
+    st.stop()
 
 st.set_page_config(
     page_title="DevOps Auditor Agent",
