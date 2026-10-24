@@ -66,7 +66,7 @@ try:
             default_base_url = str(st.secrets["OPENAI_BASE_URL"]).strip()
         if "AUDIT_MODEL" in st.secrets:
             default_model = str(st.secrets["AUDIT_MODEL"]).strip()
-except Exception:
+except Exception:  # noqa: S110, BLE001
     pass
 
 if not default_api_key and os.environ.get("OPENAI_API_KEY"):
@@ -87,7 +87,10 @@ with st.sidebar:
             value="",
             type="password",
             placeholder="Enter key to override if default hits limit",
-            help="If the shared default API key hits rate limits, provide your own Gemini API key for this session.",
+            help=(
+                "If the shared default API key hits rate limits, "
+                "provide your own Gemini API key for this session."
+            ),
         )
         active_api_key = override_key.strip() if override_key.strip() else default_api_key
     else:
@@ -104,7 +107,10 @@ with st.sidebar:
         "Audit Model",
         value=default_model,
         disabled=True,
-        help="Locked to Gemini 3.5 Flash Lite for optimal speed, token efficiency, and quota management.",
+        help=(
+            "Locked to Gemini 3.5 Flash Lite for optimal speed, "
+            "token efficiency, and quota management."
+        ),
     )
     model = default_model
 

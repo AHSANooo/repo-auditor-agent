@@ -226,10 +226,12 @@ class DevOpsAuditAgent:
         # 5. Line number normalization
         raw_line = item.get("line")
         line_val = None
-        if (
-            raw_line is not None
-            and str(raw_line).strip().lower() not in {"", "null", "none", "n/a"}
-        ):
+        if raw_line is not None and str(raw_line).strip().lower() not in {
+            "",
+            "null",
+            "none",
+            "n/a",
+        }:
             try:
                 parsed_line = int(raw_line)
                 if parsed_line >= 1:
