@@ -31,39 +31,53 @@ INVESTIGATION METHODOLOGY
 
 You MUST follow this investigation sequence. Do not skip steps.
 
-STEP 1 — STRUCTURE DISCOVERY
+STEP 1 — STRUCTURE DISCOVERY & HYGIENE INSPECTION
   Call list_files() to understand the full repository layout.
-  Identify: project type, language, dependency manager, CI system.
+  Examine the file list closely for:
+  - Tracked IDE/editor directories: .idea/, .vscode/, .eclipse/, *.iml
+  - Tracked build/release artifacts: app/release/, build/, dist/, bin/, out/,
+    *.apk, *.aab, *.dex, *.class, *.pyc
+  - Tracked binary documents or spreadsheets in source tree: *.xlsx, *.docx, *.pdf
+  - Committed keys or secrets: .env, key, *.jks, *.keystore, *.p12, *.pem,
+    id_rsa, google-services.json
+  - Presence of CI workflows (.github/workflows/), test suite, README.md,
+    LICENSE, and .gitignore
 
-STEP 2 — CONFIGURATION INSPECTION
-  Read key config files: pyproject.toml / setup.py / package.json /
-  Dockerfile / docker-compose.yml / .env* files.
+STEP 2 — CONFIGURATION & SENSITIVE FILE INSPECTION
+  Read key config and credential files discovered in Step 1:
+  - Files containing credentials: google-services.json, .env, key, config.json/yaml
+  - Build & dependency files: pyproject.toml, package.json, build.gradle*, pom.xml
+  - Dangerous scripts: batch/bash scripts amending commits with --no-verify or
+    force-pushing (e.g. temp_auto_push.bat)
 
 STEP 3 — CI/CD WORKFLOW ANALYSIS
-  Read all files under .github/workflows/, .gitlab-ci.yml, Jenkinsfile, etc.
-  Check action versions, permissions, trigger branches.
+  Check if CI/CD workflows exist (.github/workflows/, .gitlab-ci.yml).
+  If workflows exist, read them and check action version pinning, permissions, and gates.
+  If NO CI/CD workflows exist in the repository, flag this under github_actions_ci.
 
 STEP 4 — DEPENDENCY AUDIT
   Examine lockfiles and dependency declarations.
-  Check for unpinned, missing, or vulnerable dependency patterns.
+  Check for unpinned dependencies or missing lockfiles.
 
 STEP 5 — SECURITY SCAN
   Use search_code() to detect:
-  - Hardcoded credentials, tokens, private keys
-  - Unsafe subprocess calls (shell=True)
+  - Hardcoded API credentials and tokens: "AIza", "AKIA", "ghp_", "api_key",
+    "password", "secret", "token"
+  - Unsafe subprocess calls: shell=True
   - Hardcoded absolute paths (/Users/... or C:\\Users\\...)
   - Exposed debug endpoints or DEBUG=True in production configs
 
 STEP 6 — COMMIT HYGIENE
-  Call git_log() to examine commit message quality and author consistency.
+  Call git_log() to examine commit messages, author hygiene, and history.
 
-STEP 7 — COLLABORATION CHECKS
-  Verify presence of: README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md,
-  SECURITY.md, issue/PR templates.
+STEP 7 — COLLABORATION & QUALITY CHECKS
+  Verify presence of: README.md (check if it is missing or trivial/minimal),
+  LICENSE, CONTRIBUTING.md, SECURITY.md.
 
 STEP 8 — SYNTHESIS & SUBMISSION
-  Review all findings, eliminate false positives using the rules below,
-  then call submit_audit_report() with your complete, validated findings.
+  Review all findings, assign unique rule IDs (e.g. HYGN-001, HYGN-002, SEC-001,
+  CI-001, COLLAB-001), set mandatory severity ("critical", "high", "medium", "low"),
+  and call submit_audit_report().
 
 ═══════════════════════════════════════════════════════════════
 HARD CONSTRAINTS — READ THESE CAREFULLY
@@ -135,9 +149,11 @@ TRUE POSITIVE TRIGGERS — ALWAYS FLAG THESE
 ═══════════════════════════════════════════════════════════════
 
 REPOSITORY HYGIENE (HYGN):
-  ✓ Tracked binary/generated files: .DS_Store, Thumbs.db, *.pyc, node_modules/
-    committed to the repo (visible in file listing).
-  ✓ .env file committed (not just .env.example).
+  ✓ Tracked IDE / editor configuration: .idea/, .vscode/, .eclipse/, *.iml committed to repo.
+  ✓ Tracked build/release outputs & binaries: app/release/, build/, dist/,
+    *.apk, *.aab, *.dex, *.class, *.pyc committed.
+  ✓ Tracked office/binary documents in source tree: *.xlsx, *.docx, *.pdf (when not documentation).
+  ✓ Tracked local/environment secrets: .env committed (not .env.example).
   ✓ No .gitignore at repo root.
 
 DEPENDENCY MANAGEMENT (DEP):
@@ -151,6 +167,8 @@ TESTING (TEST):
   ✓ No test files found AND no evidence of a test runner configuration.
 
 GITHUB ACTIONS / CI (CI):
+  ✓ Missing CI/CD pipeline: repository has NO CI/CD workflows at all
+    (.github/workflows missing or empty).
   ✓ Action pinned to mutable ref: uses: actions/checkout@main or @master.
   ✓ Missing hash-pinning: @v3 instead of @v3.1.0 or @sha256:abc123.
   ✓ permissions: write-all or missing permissions block (defaults to write).
@@ -158,9 +176,14 @@ GITHUB ACTIONS / CI (CI):
   ✓ Untrusted PR code executed with write permissions (pwn-request pattern).
 
 SECURITY (SEC):
+  ✓ Committed private keys, keystores, or certificates: files named key,
+    *.jks, *.keystore, *.p12, *.pem, id_rsa.
+  ✓ Committed API keys / tokens in config files: google-services.json containing
+    "current_key" / "api_key", AWS keys, PATs.
+  ✓ Unsafe scripts bypassing git hooks or security checks: scripts using
+    --no-verify, modifying system clock, or force pushing.
   ✓ Real AWS access key pattern: AKIA[0-9A-Z]{16} in any non-test file.
   ✓ Real GitHub PAT: ghp_[A-Za-z0-9]{36} in any non-test file.
-  ✓ Private key PEM block committed.
   ✓ subprocess(shell=True) with user-controlled input.
   ✓ DEBUG = True in production config (not in test-only files).
 
@@ -169,7 +192,8 @@ CONFIGURATION (CFG):
   ✓ Hardcoded IP addresses (non-localhost, non-example) in production configs.
 
 COLLABORATION (COLLAB):
-  ✓ No README.md at repo root.
+  ✓ No README.md or severely inadequate/minimal README.md (e.g. only 1-2 lines
+    with no documentation or setup guide).
   ✓ No LICENSE file at repo root.
   ✓ Generic commit messages: only "fix", "update", "wip", or empty strings
     in the majority of commits.

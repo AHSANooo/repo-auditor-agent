@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, cast
 
 from openai import OpenAI
@@ -35,7 +36,7 @@ from openai.types.chat import ChatCompletionMessage
 
 from devops_auditor.prompts import SYSTEM_PROMPT, TOOL_DEFINITIONS
 from devops_auditor.redactor import sanitize_evidence
-from devops_auditor.schemas import AuditReport
+from devops_auditor.schemas import AuditReport, Violation
 from devops_auditor.tools import InspectionTools
 
 logger = logging.getLogger(__name__)
@@ -116,23 +117,193 @@ class DevOpsAuditAgent:
             logger.error("Tool '%s' raised an unexpected error: %s", name, exc)
             return {"error": f"Tool execution error: {exc}"}
 
+    def _sanitize_violation_dict(
+        self, item: dict[str, Any], seen_rule_ids: set[str]
+    ) -> dict[str, Any]:
+        """
+        Coerce and sanitize noisy LLM violation outputs into strictly valid schema dictionaries.
+        """
+        # 1. Category mapping
+        raw_cat = (
+            str(item.get("category", ""))
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+            .replace("/", "_")
+        )
+        cat_map = {
+            "hygiene": "repository_hygiene",
+            "repo_hygiene": "repository_hygiene",
+            "repository_hygiene": "repository_hygiene",
+            "dependency": "dependency_management",
+            "dependencies": "dependency_management",
+            "dependency_management": "dependency_management",
+            "deps": "dependency_management",
+            "code_quality": "code_quality",
+            "quality": "code_quality",
+            "lint": "code_quality",
+            "testing": "testing",
+            "tests": "testing",
+            "ci": "github_actions_ci",
+            "ci_cd": "github_actions_ci",
+            "github_actions": "github_actions_ci",
+            "github_actions_ci": "github_actions_ci",
+            "actions": "github_actions_ci",
+            "security": "security",
+            "sec": "security",
+            "config": "configuration",
+            "configuration": "configuration",
+            "collab": "collaboration",
+            "collaboration": "collaboration",
+            "build": "build_and_release",
+            "release": "build_and_release",
+            "build_and_release": "build_and_release",
+            "build_release": "build_and_release",
+        }
+        category = "security"
+        for k, v in cat_map.items():
+            if k in raw_cat:
+                category = v
+                break
+
+        # 2. Severity mapping
+        raw_sev = str(item.get("severity", "")).strip().lower()
+        sev_map = {
+            "critical": "critical",
+            "crit": "critical",
+            "high": "high",
+            "hi": "high",
+            "medium": "medium",
+            "med": "medium",
+            "moderate": "medium",
+            "low": "low",
+            "minor": "low",
+            "info": "low",
+        }
+        severity = sev_map.get(raw_sev)
+        if not severity:
+            severity = "high" if category in {"security", "build_and_release"} else "medium"
+
+        # 3. Rule ID normalization and deduplication
+        raw_rule = str(item.get("rule_id", "")).strip().upper()
+        prefix_by_cat = {
+            "repository_hygiene": "HYGN",
+            "dependency_management": "DEP",
+            "code_quality": "QUAL",
+            "testing": "TEST",
+            "github_actions_ci": "CI",
+            "security": "SEC",
+            "configuration": "CFG",
+            "collaboration": "COLLAB",
+            "build_and_release": "BUILD",
+        }
+        m = re.search(r"([A-Z]{2,6})[-_]?(\d{1,4})", raw_rule)
+        if m:
+            prefix = m.group(1)
+            num = int(m.group(2))
+            rule_id = f"{prefix}-{num:03d}"
+        else:
+            prefix = prefix_by_cat.get(category, "SEC")
+            rule_id = f"{prefix}-001"
+
+        if rule_id in seen_rule_ids:
+            counter = 1
+            new_id = f"{prefix}-{counter:03d}"
+            while new_id in seen_rule_ids:
+                counter += 1
+                new_id = f"{prefix}-{counter:03d}"
+            rule_id = new_id
+        seen_rule_ids.add(rule_id)
+
+        # 4. File path normalization
+        raw_file = item.get("file")
+        if raw_file is None or str(raw_file).strip().lower() in {"", "null", "none", "n/a"}:
+            file_val = None
+        else:
+            file_val = str(raw_file).strip().replace("\\", "/")
+
+        # 5. Line number normalization
+        raw_line = item.get("line")
+        line_val = None
+        if (
+            raw_line is not None
+            and str(raw_line).strip().lower() not in {"", "null", "none", "n/a"}
+        ):
+            try:
+                parsed_line = int(raw_line)
+                if parsed_line >= 1:
+                    line_val = parsed_line
+            except (ValueError, TypeError):
+                line_val = None
+
+        # 6. Description
+        raw_desc = str(item.get("description", "")).strip()
+        if not raw_desc:
+            raw_desc = f"DevOps violation identified in {category} area."
+        elif len(raw_desc) < 10:
+            raw_desc = f"DevOps issue: {raw_desc}"
+        description = raw_desc[:250]
+
+        # 7. Evidence
+        raw_ev = str(item.get("evidence", "")).strip()
+        if not raw_ev:
+            raw_ev = f"Observed in repository file '{file_val or 'structure'}'."
+        elif len(raw_ev) < 5:
+            raw_ev = f"Evidence: {raw_ev}"
+        raw_ev = sanitize_evidence(raw_ev)
+        sensitive_pattern = (  # noqa: S105
+            r"(?i)(?:ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|AKIA[0-9A-Z]{16}|"
+            r"AIza[0-9A-Za-z\-_]{35}|-----BEGIN (?:RSA )?PRIVATE KEY-----|"
+            r"(?:api[_-]?key|secret|token|password)\s*[:=]\s*['\"][A-Za-z0-9+/=_\-]{8,}['\"])"
+        )
+        secret_re = re.compile(sensitive_pattern)
+        evidence = secret_re.sub("[REDACTED]", raw_ev)[:500]
+
+        # 8. Recommendation
+        raw_rec = str(item.get("recommendation", "")).strip()
+        if not raw_rec:
+            raw_rec = "Resolve this issue according to DevOps security and quality best practices."
+        elif len(raw_rec) < 10:
+            raw_rec = f"Remediation: {raw_rec}"
+        recommendation = raw_rec[:350]
+
+        return {
+            "rule_id": rule_id,
+            "category": category,
+            "severity": severity,
+            "file": file_val,
+            "line": line_val,
+            "description": description,
+            "evidence": evidence,
+            "recommendation": recommendation,
+        }
+
     def _process_submission(self, args: dict[str, Any], repo_url: str) -> AuditReport:
         """
         Validate and sanitize the LLM's submitted violation list.
 
-        Applies redaction to all evidence fields and validates the result
-        against the AuditReport Pydantic model.
+        Applies robust sanitization, deduplication, and evidence redaction
+        so that all genuine findings are preserved and valid schema models are built.
         """
-        raw_violations: list[dict[str, Any]] = args.get("violations", [])
+        raw_violations: list[Any] = args.get("violations", [])
+        if not isinstance(raw_violations, list):
+            raw_violations = []
 
-        # Sanitize evidence on every violation before schema validation
-        cleaned: list[dict[str, Any]] = []
-        for v in raw_violations:
-            evidence = sanitize_evidence(v.get("evidence", ""))
-            cleaned.append({**v, "evidence": evidence})
+        seen_rule_ids: set[str] = set()
+        validated: list[Violation] = []
 
-        # Build validated Pydantic model — raises ValidationError on schema violation
-        return AuditReport(repository=repo_url, violations=cleaned)  # type: ignore[arg-type]
+        for item in raw_violations:
+            if not isinstance(item, dict):
+                continue
+            try:
+                sanitized_dict = self._sanitize_violation_dict(item, seen_rule_ids)
+                v = Violation.model_validate(sanitized_dict)
+                validated.append(v)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Skipped malformed violation item: %s (%s)", item, exc)
+
+        return AuditReport(repository=repo_url, violations=validated)
 
     def _prune_old_tool_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
@@ -253,6 +424,7 @@ class DevOpsAuditAgent:
                 if fn_name == "submit_audit_report":
                     try:
                         report = self._process_submission(fn_args, repo_url)
+                        self._last_submitted_report = report
                         logger.info(
                             "Audit complete. %d violations found. Severity: %s",
                             len(report.violations),
@@ -261,8 +433,22 @@ class DevOpsAuditAgent:
                         return report.model_dump(mode="json")
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Report validation failed: %s", exc)
-                        # Return empty valid report on schema failure
-                        return AuditReport(repository=repo_url).model_dump(mode="json")
+                        # Feed validation error back as tool response so agent can adjust
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(
+                                    {
+                                        "error": (
+                                            f"Validation failed: {exc}. Please check violation "
+                                            "fields and call submit_audit_report again."
+                                        )
+                                    }
+                                ),
+                            }
+                        )
+                        continue
 
                 # ── Standard Tool Dispatch ───────────────────────────────────
                 result = self._dispatch_tool(fn_name, fn_args)
@@ -282,7 +468,10 @@ class DevOpsAuditAgent:
 
         # ── Iteration Limit Reached ──────────────────────────────────────────
         logger.warning(
-            "Max iterations (%d) reached without submit_audit_report call. Returning empty report.",
+            "Max iterations (%d) reached without clean submission. "
+            "Returning best available report.",
             self.max_iterations,
         )
+        if hasattr(self, "_last_submitted_report") and self._last_submitted_report is not None:
+            return self._last_submitted_report.model_dump(mode="json")
         return AuditReport(repository=repo_url).model_dump(mode="json")

@@ -194,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
 
         violation_count = len(report_data.get("violations", []))
         logger.info("Audit complete. %d violations written to: %s", violation_count, args.output)
-        print(f"✓ Audit complete: {violation_count} violation(s) found → {args.output}")
+        print(f"[OK] Audit complete: {violation_count} violation(s) found -> {args.output}")
 
         return EX_OK
 

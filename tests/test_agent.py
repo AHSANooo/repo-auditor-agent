@@ -266,3 +266,51 @@ class TestRedactionIntegration:
 
         result = agent.run("https://github.com/example/repo")
         assert len(result["violations"]) == 1
+
+
+# ─── Test: Robust Sanitization & Deduplication ────────────────────────────────
+
+
+class TestAgentSanitizationAndResilience:
+    def test_noisy_rule_id_normalized(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        violation = {
+            **_valid_violation(),
+            "rule_id": "SEC-001Attributes",
+            "category": "ci_cd",
+            "line": "42",
+        }
+        mock_client.chat.completions.create.return_value = _make_response(
+            tool_calls=[_make_tool_call("submit_audit_report", {"violations": [violation]})]
+        )
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 1
+        assert result["violations"][0]["rule_id"] == "SEC-001"
+        assert result["violations"][0]["category"] == "github_actions_ci"
+        assert result["violations"][0]["line"] == 42
+
+    def test_missing_severity_defaults_properly(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        violation = _valid_violation()
+        del violation["severity"]
+        mock_client.chat.completions.create.return_value = _make_response(
+            tool_calls=[_make_tool_call("submit_audit_report", {"violations": [violation]})]
+        )
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 1
+        assert result["violations"][0]["severity"] in {"critical", "high", "medium", "low"}
+
+    def test_duplicate_rule_ids_deduplicated(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        v1 = {**_valid_violation(), "rule_id": "SEC-001"}
+        v2 = {**_valid_violation(), "rule_id": "SEC-001"}
+        mock_client.chat.completions.create.return_value = _make_response(
+            tool_calls=[_make_tool_call("submit_audit_report", {"violations": [v1, v2]})]
+        )
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 2
+        rule_ids = [v["rule_id"] for v in result["violations"]]
+        assert len(set(rule_ids)) == 2

@@ -53,19 +53,61 @@ st.markdown(
     "vulnerabilities, and infrastructure hygiene** using an autonomous ReAct agent loop."
 )
 
+# ── Load default configuration from Streamlit Secrets or Environment ───────────
+default_api_key = ""
+default_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+default_model = "gemini-3.5-flash-lite"
+
+try:
+    if hasattr(st, "secrets"):
+        if "OPENAI_API_KEY" in st.secrets:
+            default_api_key = str(st.secrets["OPENAI_API_KEY"]).strip()
+        if "OPENAI_BASE_URL" in st.secrets:
+            default_base_url = str(st.secrets["OPENAI_BASE_URL"]).strip()
+        if "AUDIT_MODEL" in st.secrets:
+            default_model = str(st.secrets["AUDIT_MODEL"]).strip()
+except Exception:
+    pass
+
+if not default_api_key and os.environ.get("OPENAI_API_KEY"):
+    default_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+if os.environ.get("OPENAI_BASE_URL"):
+    default_base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+if os.environ.get("AUDIT_MODEL"):
+    default_model = os.environ.get("AUDIT_MODEL", "").strip()
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Configuration")
-    api_key = st.text_input(
-        "Gemini / OpenAI API Key",
-        value=os.environ.get("OPENAI_API_KEY", ""),
-        type="password",
-        help="Leave blank if OPENAI_API_KEY is already set in deployment secrets.",
-    )
-    model = st.selectbox(
+
+    if default_api_key:
+        st.success("🔒 Default Gemini API Key configured in Secrets")
+        override_key = st.text_input(
+            "Session Gemini API Key (Override)",
+            value="",
+            type="password",
+            placeholder="Enter key to override if default hits limit",
+            help="If the shared default API key hits rate limits, provide your own Gemini API key for this session.",
+        )
+        active_api_key = override_key.strip() if override_key.strip() else default_api_key
+    else:
+        active_api_key = st.text_input(
+            "Gemini API Key",
+            value="",
+            type="password",
+            placeholder="Enter your Gemini API key...",
+            help="Provide your Google Gemini API key.",
+        ).strip()
+
+    # Lock model to Gemini 3.5 Flash Lite
+    st.text_input(
         "Audit Model",
-        options=["gemini-3.5-flash-lite", "gpt-4o-mini", "qwen/qwen3.8-27b"],
-        index=0,
+        value=default_model,
+        disabled=True,
+        help="Locked to Gemini 3.5 Flash Lite for optimal speed, token efficiency, and quota management.",
     )
+    model = default_model
+
     max_iters = st.slider("Max ReAct Iterations", min_value=5, max_value=30, value=15)
 
 repo_url = st.text_input(
@@ -76,13 +118,15 @@ repo_url = st.text_input(
 if st.button("🚀 Start Audit", type="primary", use_container_width=True):
     if not repo_url.strip():
         st.error("Please provide a valid GitHub repository URL.")
+    elif not active_api_key:
+        st.error(
+            "⚠️ No API Key found! Please configure `OPENAI_API_KEY` in Streamlit Secrets "
+            "or enter an override key in the sidebar."
+        )
     else:
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
-            if "gemini" in model:
-                os.environ["OPENAI_BASE_URL"] = (
-                    "https://generativelanguage.googleapis.com/v1beta/openai/"
-                )
+        os.environ["OPENAI_API_KEY"] = active_api_key
+        os.environ["OPENAI_BASE_URL"] = default_base_url
+        os.environ["AUDIT_MODEL"] = model
 
         status_box = st.status("Auditing repository...", expanded=True)
         try:
@@ -137,4 +181,16 @@ if st.button("🚀 Start Audit", type="primary", use_container_width=True):
 
         except Exception as exc:
             status_box.update(label="Audit Failed ❌", state="error")
-            st.error(f"Error during audit: {exc}")
+            err_msg = str(exc)
+            if any(
+                k in err_msg.lower()
+                for k in ["rate limit", "429", "resource_exhausted", "quota", "too many requests"]
+            ):
+                st.error(
+                    "⚠️ **Gemini API Quota / Rate Limit Exceeded**\n\n"
+                    "The shared default API key has reached its request quota. "
+                    "Please provide an alternative Gemini API Key in the sidebar under "
+                    "**'Session Gemini API Key (Override)'** to resume auditing."
+                )
+            else:
+                st.error(f"Error during audit: {exc}")
