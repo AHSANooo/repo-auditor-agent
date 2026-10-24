@@ -81,8 +81,8 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
-          pytest tests/ -v --tb=short \
-            --cov=src/devops_auditor \
+          pytest -v --tb=short \
+            --cov=devops_auditor \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=80

@@ -113,7 +113,15 @@ disallow_untyped_defs = false
 # ============================================================
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["tests/fixtures", ".venv", ".git", "__pycache__", "dist", "build"]
+norecursedirs = [
+    "fixtures",
+    "tests/fixtures",
+    ".venv",
+    ".git",
+    "__pycache__",
+    "dist",
+    "build",
+]
 addopts = [
     "--strict-markers",
     "--tb=short",

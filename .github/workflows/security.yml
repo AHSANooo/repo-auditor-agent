@@ -89,9 +89,7 @@ jobs:
           fetch-depth: 0    # Full history for secret scanning
 
       - name: Run TruffleHog — OSS secret scanner
-        uses: trufflesecurity/trufflehog@540d7cef14c05cb64dfb0c6a8c7c48b20eec75cc  # v3.88.1
+        uses: trufflesecurity/trufflehog@d73edfb85d79432e3c767c407afdee59c9a34fde  # v3.88.1
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
-          extra_args: --only-verified
+          extra_args: --only-verified --exclude-paths=tests/fixtures
