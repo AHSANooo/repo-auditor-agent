@@ -65,7 +65,13 @@ def vulnerable_repo_path(tmp_path: Path) -> str:
       CI-002:  permissions: write-all in workflow
       TEST-001: CI uses pytest --co (collect-only, skips execution)
     """
-    return _copy_fixture("vulnerable-repo", tmp_path)
+    path_str = _copy_fixture("vulnerable-repo", tmp_path)
+    # Plant .env file into the copied temp repo (simulating an un-gitignored committed .env)
+    # This ensures CI runners (where .env is gitignored and not checked out) have the file present
+    env_file = Path(path_str) / ".env"
+    if not env_file.exists():
+        env_file.write_text("DATABASE_URL=postgres://user:pass@localhost/db\n", encoding="utf-8")
+    return path_str
 
 
 @pytest.fixture()
