@@ -35,8 +35,6 @@ venv.bak/
 # ============================================================
 # Environment & Secrets — NEVER commit these
 # ============================================================
-.env
-.env.*
 !.env.example
 *.pem
 *.key
@@ -65,7 +63,6 @@ dmypy.json
 # ============================================================
 # IDE & Editor Artifacts
 # ============================================================
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -108,3 +105,5 @@ desktop.ini
 branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
+config.bat
+node_modules
