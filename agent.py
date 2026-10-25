@@ -10,6 +10,10 @@ invocation pattern is also supported.
 """
 
 import sys
+from pathlib import Path
+
+# Ensure src is on sys.path so 'python agent.py' works directly out-of-the-box
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from devops_auditor.cli import main
 
