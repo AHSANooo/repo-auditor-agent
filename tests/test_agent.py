@@ -314,3 +314,90 @@ class TestAgentSanitizationAndResilience:
         assert len(result["violations"]) == 2
         rule_ids = [v["rule_id"] for v in result["violations"]]
         assert len(set(rule_ids)) == 2
+
+    def test_submission_synonymous_findings_key(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        """Agent should accept 'findings' or 'issues' instead of strictly 'violations'."""
+        mock_client.chat.completions.create.return_value = _make_response(
+            tool_calls=[_make_tool_call("submit_audit_report", {"findings": [_valid_violation()]})]
+        )
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 1
+        assert result["violations"][0]["rule_id"] == "SEC-001"
+
+    def test_submission_nested_report_key(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        """Agent should extract violations when nested under 'report' or 'audit_report'."""
+        mock_client.chat.completions.create.return_value = _make_response(
+            tool_calls=[
+                _make_tool_call(
+                    "submit_audit_report", {"report": {"violations": [_valid_violation()]}}
+                )
+            ]
+        )
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 1
+
+    def test_plain_text_json_recovery(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        """Agent should recover violations from assistant content if tool_calls is empty."""
+        json_content = json.dumps({"violations": [_valid_violation()]})
+        mock_client.chat.completions.create.return_value = _make_response(
+            tool_calls=None,
+            content=f"```json\n{json_content}\n```",
+        )
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 1
+        assert result["violations"][0]["rule_id"] == "SEC-001"
+
+    def test_tool_argument_aliases_normalized(self, agent: DevOpsAuditAgent) -> None:
+        """Synonymous arguments for tools must be normalized to expected signatures."""
+        read_args = agent._normalize_tool_arguments(
+            "read_file", {"file_path": "a.py", "start": "10"}
+        )
+        assert read_args["path"] == "a.py"
+        assert read_args["start_line"] == 10
+
+        list_args = agent._normalize_tool_arguments("list_files", {"directory": "src"})
+        assert list_args["sub_dir"] == "src"
+
+        search_args = agent._normalize_tool_arguments("search_code", {"regex": "key", "ext": ".py"})
+        assert search_args["pattern"] == "key"
+        assert search_args["file_extension"] == ".py"
+
+        log_args = agent._normalize_tool_arguments("git_log", {"limit": "5"})
+        assert log_args["max_count"] == 5
+
+    def test_forced_final_turn_submits_report(
+        self, agent: DevOpsAuditAgent, mock_client: MagicMock
+    ) -> None:
+        """On the final iteration, agent forces submit_audit_report via tool_choice."""
+        # Agent has max_iterations=5. First 4 calls return list_files.
+        # Call 5 (final turn) returns submit_audit_report.
+        non_terminal = _make_response(tool_calls=[_make_tool_call("list_files", {})])
+        terminal = _make_response(
+            tool_calls=[
+                _make_tool_call("submit_audit_report", {"violations": [_valid_violation()]})
+            ]
+        )
+        mock_client.chat.completions.create.side_effect = [
+            non_terminal,
+            non_terminal,
+            non_terminal,
+            non_terminal,
+            terminal,
+        ]
+
+        result = agent.run("https://github.com/example/repo")
+        assert len(result["violations"]) == 1
+        assert mock_client.chat.completions.create.call_count == 5
+
+        # Verify that call 5 requested submit_audit_report specifically
+        final_call_kwargs = mock_client.chat.completions.create.call_args_list[4][1]
+        assert final_call_kwargs.get("tool_choice") == {
+            "type": "function",
+            "function": {"name": "submit_audit_report"},
+        }

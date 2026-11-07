@@ -78,6 +78,11 @@ STEP 8 — SYNTHESIS & SUBMISSION
   Review all findings, assign unique rule IDs (e.g. HYGN-001, HYGN-002, SEC-001,
   CI-001, COLLAB-001), set mandatory severity ("critical", "high", "medium", "low"),
   and call submit_audit_report().
+  CRITICAL: You MUST submit ALL identified violations via submit_audit_report().
+  Never omit genuine defects. If you find unpinned dependencies, exposed secrets,
+  mutable GitHub Action tags (@master/@v1/@v2), missing LICENSE, or committed IDE/env
+  files, you MUST report each one in the violations array. Do not conclude with plain
+  text; always execute the submit_audit_report() tool call.
 
 ═══════════════════════════════════════════════════════════════
 HARD CONSTRAINTS — READ THESE CAREFULLY
