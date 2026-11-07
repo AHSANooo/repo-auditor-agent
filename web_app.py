@@ -205,26 +205,26 @@ with st.sidebar:
     )
     model = default_model
 
-    # Clamp default iterations for public runs:
-    # Default is 8 on community quota. Unlock up to 15 only if user supplies their own key.
+    # ReAct iterations configuration:
+    # Default is 10 on community quota. Unlock up to 20 when user supplies their own key.
     user_supplied_key = bool(override_key.strip()) if default_api_key else bool(active_api_key)
     if user_supplied_key:
         max_iters = st.slider(
             "Max ReAct Iterations",
-            min_value=3,
-            max_value=15,
-            value=10,
-            help="Custom Gemini API Key detected: Unlocked up to 15 iterations.",
+            min_value=5,
+            max_value=20,
+            value=12,
+            help="Custom Gemini API Key detected: Unlocked up to 20 iterations.",
         )
     else:
         max_iters = st.slider(
             "Max ReAct Iterations",
-            min_value=3,
-            max_value=8,
-            value=8,
+            min_value=5,
+            max_value=12,
+            value=10,
             help=(
-                "Clamped to 8 iterations on community quota. "
-                "Supply your own API key to unlock up to 15."
+                "Community quota: Default 10 iterations for thorough inspection. "
+                "Supply your own API key to unlock up to 20."
             ),
         )
 

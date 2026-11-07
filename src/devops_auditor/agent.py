@@ -25,6 +25,7 @@ Context window management:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -36,7 +37,7 @@ from openai.types.chat import ChatCompletionMessage
 
 from devops_auditor.prompts import SYSTEM_PROMPT, TOOL_DEFINITIONS
 from devops_auditor.redactor import sanitize_evidence
-from devops_auditor.schemas import AuditReport, Violation
+from devops_auditor.schemas import _SECRET_PATTERN, AuditReport, Violation
 from devops_auditor.tools import InspectionTools
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,47 @@ class DevOpsAuditAgent:
 
         return OpenAI(**kwargs)
 
+    def _normalize_tool_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """
+        Normalize synonymous parameter names to match InspectionTools signatures.
+        """
+        norm = dict(arguments)
+        if name == "read_file":
+            for alias in ("file_path", "filename", "file", "filepath", "target_file"):
+                if alias in norm and "path" not in norm:
+                    norm["path"] = norm.pop(alias)
+            if "start" in norm and "start_line" not in norm:
+                norm["start_line"] = norm.pop("start")
+            if "end" in norm and "end_line" not in norm:
+                norm["end_line"] = norm.pop("end")
+            for k in ("start_line", "end_line"):
+                if k in norm:
+                    with contextlib.suppress(ValueError, TypeError):
+                        norm[k] = int(norm[k])
+
+        elif name == "list_files":
+            for alias in ("directory", "dir", "path", "folder", "sub_directory"):
+                if alias in norm and "sub_dir" not in norm:
+                    norm["sub_dir"] = norm.pop(alias)
+
+        elif name == "search_code":
+            for alias in ("regex", "query", "search_pattern", "keyword"):
+                if alias in norm and "pattern" not in norm:
+                    norm["pattern"] = norm.pop(alias)
+            for alias in ("ext", "extension"):
+                if alias in norm and "file_extension" not in norm:
+                    norm["file_extension"] = norm.pop(alias)
+
+        elif name == "git_log":
+            for alias in ("limit", "count", "n", "max_commits", "max"):
+                if alias in norm and "max_count" not in norm:
+                    norm["max_count"] = norm.pop(alias)
+            if "max_count" in norm:
+                with contextlib.suppress(ValueError, TypeError):
+                    norm["max_count"] = int(norm["max_count"])
+
+        return norm
+
     def _dispatch_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """
         Route a tool call from the LLM to the corresponding InspectionTools method.
@@ -111,8 +153,9 @@ class DevOpsAuditAgent:
             avail = "list_files, read_file, search_code, git_log"
             return {"error": f"Tool '{name}' does not exist. Available: {avail}"}
 
+        normalized_args = self._normalize_tool_arguments(name, arguments)
         try:
-            result: dict[str, Any] = method(**arguments)
+            result: dict[str, Any] = method(**normalized_args)
             logger.debug("Tool '%s' returned %d keys", name, len(result))
             return result
         except TypeError as exc:
@@ -140,26 +183,41 @@ class DevOpsAuditAgent:
             "hygiene": "repository_hygiene",
             "repo_hygiene": "repository_hygiene",
             "repository_hygiene": "repository_hygiene",
+            "git": "repository_hygiene",
+            "vcs": "repository_hygiene",
             "dependency": "dependency_management",
             "dependencies": "dependency_management",
             "dependency_management": "dependency_management",
             "deps": "dependency_management",
+            "package": "dependency_management",
             "code_quality": "code_quality",
             "quality": "code_quality",
             "lint": "code_quality",
             "testing": "testing",
             "tests": "testing",
+            "test": "testing",
             "ci": "github_actions_ci",
             "ci_cd": "github_actions_ci",
             "github_actions": "github_actions_ci",
             "github_actions_ci": "github_actions_ci",
             "actions": "github_actions_ci",
+            "workflow": "github_actions_ci",
+            "workflows": "github_actions_ci",
             "security": "security",
             "sec": "security",
+            "secret": "security",
+            "secrets": "security",
+            "credential": "security",
+            "credentials": "security",
+            "key": "security",
             "config": "configuration",
             "configuration": "configuration",
             "collab": "collaboration",
             "collaboration": "collaboration",
+            "license": "collaboration",
+            "readme": "collaboration",
+            "docs": "collaboration",
+            "documentation": "collaboration",
             "build": "build_and_release",
             "release": "build_and_release",
             "build_and_release": "build_and_release",
@@ -202,33 +260,33 @@ class DevOpsAuditAgent:
             "collaboration": "COLLAB",
             "build_and_release": "BUILD",
         }
+        default_prefix = prefix_by_cat.get(category, "SEC")
         m = re.search(r"([A-Z]{2,6})[-_]?(\d{1,4})", raw_rule)
-        if m:
+        if m and 2 <= len(m.group(1)) <= 6:
             prefix = m.group(1)
             num = int(m.group(2))
-            rule_id = f"{prefix}-{num:03d}"
         else:
-            prefix = prefix_by_cat.get(category, "SEC")
-            rule_id = f"{prefix}-001"
+            prefix = default_prefix
+            num_match = re.search(r"\d+", raw_rule)
+            num = int(num_match.group(0)) if num_match else 1
+        rule_id = f"{prefix}-{num:03d}"
 
         if rule_id in seen_rule_ids:
             counter = 1
-            new_id = f"{prefix}-{counter:03d}"
-            while new_id in seen_rule_ids:
+            while f"{prefix}-{counter:03d}" in seen_rule_ids:
                 counter += 1
-                new_id = f"{prefix}-{counter:03d}"
-            rule_id = new_id
+            rule_id = f"{prefix}-{counter:03d}"
         seen_rule_ids.add(rule_id)
 
         # 4. File path normalization
-        raw_file = item.get("file")
+        raw_file = item.get("file") or item.get("path") or item.get("file_path")
         if raw_file is None or str(raw_file).strip().lower() in {"", "null", "none", "n/a"}:
             file_val = None
         else:
             file_val = str(raw_file).strip().replace("\\", "/")
 
         # 5. Line number normalization
-        raw_line = item.get("line")
+        raw_line = item.get("line") or item.get("line_number")
         line_val = None
         if raw_line is not None and str(raw_line).strip().lower() not in {
             "",
@@ -244,7 +302,9 @@ class DevOpsAuditAgent:
                 line_val = None
 
         # 6. Description
-        raw_desc = str(item.get("description", "")).strip()
+        raw_desc = str(
+            item.get("description") or item.get("message") or item.get("title") or ""
+        ).strip()
         if not raw_desc:
             raw_desc = f"DevOps violation identified in {category} area."
         elif len(raw_desc) < 10:
@@ -252,7 +312,7 @@ class DevOpsAuditAgent:
         description = raw_desc[:250]
 
         # 7. Evidence
-        raw_ev = str(item.get("evidence", "")).strip()
+        raw_ev = str(item.get("evidence") or item.get("snippet") or item.get("code") or "").strip()
         if not raw_ev:
             raw_ev = f"Observed in repository file '{file_val or 'structure'}'."
         elif len(raw_ev) < 5:
@@ -265,9 +325,13 @@ class DevOpsAuditAgent:
         )
         secret_re = re.compile(sensitive_pattern)
         evidence = secret_re.sub("[REDACTED]", raw_ev)[:500]
+        if _SECRET_PATTERN.search(evidence):
+            evidence = _SECRET_PATTERN.sub("[REDACTED]", evidence)
 
         # 8. Recommendation
-        raw_rec = str(item.get("recommendation", "")).strip()
+        raw_rec = str(
+            item.get("recommendation") or item.get("remediation") or item.get("fix") or ""
+        ).strip()
         if not raw_rec:
             raw_rec = "Resolve this issue according to DevOps security and quality best practices."
         elif len(raw_rec) < 10:
@@ -285,23 +349,140 @@ class DevOpsAuditAgent:
             "recommendation": recommendation,
         }
 
-    def _process_submission(self, args: dict[str, Any], repo_url: str) -> AuditReport:
+    @staticmethod
+    def _extract_raw_violations(args: Any) -> list[Any]:
+        """
+        Extract violations list from any payload structure returned by the LLM.
+
+        Handles:
+        - {"violations": [...]}
+        - {"findings": [...]}
+        - {"issues": [...]}
+        - {"defects": [...]}
+        - {"results": [...]}
+        - {"report": {"violations": [...]}} or {"report": [...]}
+        - {"audit_report": {"violations": [...]}}
+        - Raw list: [...]
+        - Single violation dict: {"rule_id": "SEC-001", ...}
+        - JSON stringified payloads
+        """
+        if isinstance(args, list):
+            return args
+
+        if not isinstance(args, dict):
+            if isinstance(args, str):
+                with contextlib.suppress(Exception):
+                    parsed = json.loads(args)
+                    return DevOpsAuditAgent._extract_raw_violations(parsed)
+            return []
+
+        # Check direct keys
+        for key in (
+            "violations",
+            "findings",
+            "issues",
+            "defects",
+            "results",
+            "vulnerabilities",
+            "items",
+            "audit_violations",
+        ):
+            val = args.get(key)
+            if isinstance(val, list):
+                return val
+            if isinstance(val, str):
+                with contextlib.suppress(Exception):
+                    parsed = json.loads(val)
+                    if isinstance(parsed, list):
+                        return parsed
+
+        # Check nested containers
+        for container in ("report", "audit_report", "data", "audit"):
+            nested = args.get(container)
+            if isinstance(nested, dict):
+                sub = DevOpsAuditAgent._extract_raw_violations(nested)
+                if sub:
+                    return sub
+            elif isinstance(nested, list):
+                return nested
+
+        # Check if args itself represents a single violation
+        if any(k in args for k in ("rule_id", "description", "category", "evidence")):
+            return [args]
+
+        # Check if values are violation dicts
+        dict_vals = [
+            v
+            for v in args.values()
+            if isinstance(v, dict)
+            and any(k in v for k in ("rule_id", "description", "category", "evidence"))
+        ]
+        if dict_vals:
+            return dict_vals
+
+        return []
+
+    @staticmethod
+    def _extract_json_from_text(text: str) -> dict[str, Any] | list[Any] | None:
+        """
+        Extract structured JSON from free-form model text.
+        """
+        if not text or not text.strip():
+            return None
+
+        # 1. Look for markdown code block ```json ... ```
+        block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+        if block_match:
+            with contextlib.suppress(Exception):
+                parsed = json.loads(block_match.group(1).strip())
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+
+        # 2. Look for raw JSON object {...}
+        obj_match = re.search(
+            r"(\{[\s\S]*\"(?:violations|findings|issues|rule_id)\"[\s\S]*\})", text
+        )
+        if obj_match:
+            with contextlib.suppress(Exception):
+                parsed = json.loads(obj_match.group(1).strip())
+                if isinstance(parsed, dict):
+                    return parsed
+
+        # 3. Look for raw JSON array [...]
+        arr_match = re.search(r"(\[[\s\S]*\"(?:rule_id|description|category)\"[\s\S]*\])", text)
+        if arr_match:
+            with contextlib.suppress(Exception):
+                parsed = json.loads(arr_match.group(1).strip())
+                if isinstance(parsed, list):
+                    return parsed
+
+        return None
+
+    def _process_submission(self, args: Any, repo_url: str) -> AuditReport:
         """
         Validate and sanitize the LLM's submitted violation list.
 
         Applies robust sanitization, deduplication, and evidence redaction
         so that all genuine findings are preserved and valid schema models are built.
         """
-        raw_violations: list[Any] = args.get("violations", [])
-        if not isinstance(raw_violations, list):
-            raw_violations = []
+        raw_violations = self._extract_raw_violations(args)
 
         seen_rule_ids: set[str] = set()
         validated: list[Violation] = []
 
         for item in raw_violations:
-            if not isinstance(item, dict):
+            if isinstance(item, str):
+                item = {
+                    "description": item,
+                    "evidence": item,
+                    "recommendation": (
+                        "Address this DevOps finding according to industry security "
+                        "and operational standards."
+                    ),
+                }
+            elif not isinstance(item, dict):
                 continue
+
             try:
                 sanitized_dict = self._sanitize_violation_dict(item, seen_rule_ids)
                 v = Violation.model_validate(sanitized_dict)
@@ -372,14 +553,57 @@ class DevOpsAuditAgent:
             self._iteration_count = iteration + 1
             logger.info("ReAct iteration %d/%d", self._iteration_count, self.max_iterations)
 
+            is_final_turn = self._iteration_count >= self.max_iterations
+            call_tool_choice: Any = "auto"
+
+            if self.max_iterations > 2 and self._iteration_count == self.max_iterations - 1:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[Turn {self._iteration_count}/{self.max_iterations}] "
+                            "Notice: Approaching iteration limit. Complete pending checks "
+                            "and prepare to call submit_audit_report() on the next turn."
+                        ),
+                    }
+                )
+            elif is_final_turn:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"[Turn {self._iteration_count}/{self.max_iterations}] "
+                            "CRITICAL: Final turn reached! You MUST call submit_audit_report() now "
+                            "with all violations detected so far. Do not call any further tools."
+                        ),
+                    }
+                )
+                call_tool_choice = {
+                    "type": "function",
+                    "function": {"name": "submit_audit_report"},
+                }
+
             # ── LLM Call ────────────────────────────────────────────────────
-            response = cast(Any, self.client.chat.completions).create(
-                model=self.model,
-                messages=messages,
-                tools=TOOL_DEFINITIONS,
-                tool_choice="auto",
-                temperature=0.1,  # Low temperature for deterministic, analytical output
-            )
+            try:
+                response = cast(Any, self.client.chat.completions).create(
+                    model=self.model,
+                    messages=messages,
+                    tools=TOOL_DEFINITIONS,
+                    tool_choice=call_tool_choice,
+                    temperature=0.1,  # Low temperature for deterministic, analytical output
+                )
+            except Exception as call_err:
+                if call_tool_choice != "auto":
+                    logger.warning("Specific tool_choice failed (%s); retrying with auto", call_err)
+                    response = cast(Any, self.client.chat.completions).create(
+                        model=self.model,
+                        messages=messages,
+                        tools=TOOL_DEFINITIONS,
+                        tool_choice="auto",
+                        temperature=0.1,
+                    )
+                else:
+                    raise
 
             assistant_msg: ChatCompletionMessage = response.choices[0].message
 
@@ -414,13 +638,48 @@ class DevOpsAuditAgent:
                     ]
             messages.append(assistant_dict)
 
-            # ── No Tool Calls → LLM Finished Without Submitting ─────────────
+            # ── No Tool Calls → Handle Plain Text or Nudge ──────────────────
             if not assistant_msg.tool_calls:
+                content = assistant_msg.content or ""
                 logger.warning(
-                    "LLM returned no tool calls at iteration %d. Returning empty report.",
+                    "LLM returned no tool calls at iteration %d (content length: %d).",
                     self._iteration_count,
+                    len(content),
                 )
-                break
+                # 1. Check if model output contains a structured JSON report
+                extracted_json = self._extract_json_from_text(content)
+                if extracted_json is not None:
+                    try:
+                        args_to_process = (
+                            extracted_json
+                            if isinstance(extracted_json, dict)
+                            else {"violations": extracted_json}
+                        )
+                        report = self._process_submission(args_to_process, repo_url)
+                        self._last_submitted_report = report
+                        logger.info(
+                            "Recovered %d violations from plain-text output.",
+                            len(report.violations),
+                        )
+                        return report.model_dump(mode="json")
+                    except Exception as parse_err:
+                        logger.debug("Failed to process extracted JSON from content: %s", parse_err)
+
+                # 2. Nudge to submit if turns remain, or break if final
+                if not is_final_turn:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You replied with text instead of calling submit_audit_report(). "
+                                "Please format all detected violations and call "
+                                "submit_audit_report() now."
+                            ),
+                        }
+                    )
+                    continue
+                else:
+                    break
 
             # ── Process Each Tool Call ───────────────────────────────────────
             for tool_call in assistant_msg.tool_calls:
@@ -482,16 +741,16 @@ class DevOpsAuditAgent:
                 )
 
             # ── Context Pruning ──────────────────────────────────────────────
-            # Rough heuristic: prune if message count grows very large
             if len(messages) > 60:
                 messages = self._prune_old_tool_messages(messages)
 
-        # ── Iteration Limit Reached ──────────────────────────────────────────
+        # ── Iteration Limit Reached / Exit Fallback ──────────────────────────
+        if hasattr(self, "_last_submitted_report") and self._last_submitted_report is not None:
+            return self._last_submitted_report.model_dump(mode="json")
+
         logger.warning(
             "Max iterations (%d) reached without clean submission. "
             "Returning best available report.",
             self.max_iterations,
         )
-        if hasattr(self, "_last_submitted_report") and self._last_submitted_report is not None:
-            return self._last_submitted_report.model_dump(mode="json")
         return AuditReport(repository=repo_url).model_dump(mode="json")
