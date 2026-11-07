@@ -27,6 +27,8 @@ dependencies = [
     "pydantic>=2.7.0",
     "python-dotenv>=1.0.0",
     "rich>=13.7.0",
+    "streamlit>=1.35.0",
+    "google-api-core>=2.14.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +44,7 @@ dev = [
 ]
 web = [
     "streamlit>=1.35.0",
+    "google-api-core>=2.14.0",
 ]
 
 [project.scripts]

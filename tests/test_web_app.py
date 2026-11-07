@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytest.importorskip("streamlit")
+
 import web_app
 
 from devops_auditor.agent import DevOpsAuditAgent
