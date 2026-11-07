@@ -10,6 +10,7 @@ Deploy for free:
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import os
@@ -138,32 +139,81 @@ def run_cached_audit(
     Execute repository audit with Streamlit native caching by repo URL and commit hash.
 
     Identical targets hit cache and avoid LLM invocation within 24h.
+    All status elements are created inside this function to ensure safe cache replay.
     """
+    status_box = st.status("Auditing repository...", expanded=True)
+    if commit_hash:
+        status_box.write(f"📌 Target Commit SHA: `{commit_hash[:8]}`")
+    status_box.write("🧠 Initializing ReAct loop and inspection sandbox...")
+
+    def trace_step(fn_name: str, fn_args: dict[str, Any]) -> None:
+        if fn_name == "list_files":
+            sub = fn_args.get("sub_dir")
+            if sub:
+                status_box.write(f"Executing: list_files(sub_dir='{sub}')")
+            else:
+                status_box.write("Executing: list_files()")
+        elif fn_name == "read_file":
+            p = fn_args.get("file_path") or fn_args.get("path") or ""
+            status_box.write(f"Inspecting: {p}")
+        elif fn_name == "search_code":
+            pat = str(fn_args.get("pattern", ""))
+            cred_words = ["secret", "key", "token", "password", "aws", "cred"]
+            if any(w in pat.lower() for w in cred_words):
+                status_box.write("Running regex pattern search for credentials...")
+            else:
+                snippet = (pat[:35] + "...") if len(pat) > 35 else pat
+                status_box.write(f"Running regex pattern search: `{snippet}`")
+        elif fn_name == "git_log":
+            status_box.write("Inspecting git commit history: git_log()")
+        elif fn_name == "submit_audit_report":
+            status_box.write("Validating findings against Pydantic V2 contract...")
+        else:
+            status_box.write(f"Executing: {fn_name}()")
+
+        if _step_cb is not None:
+            with contextlib.suppress(Exception):
+                _step_cb(fn_name, fn_args)
+
     os.environ["OPENAI_API_KEY"] = api_key
     os.environ["OPENAI_BASE_URL"] = default_base_url
     os.environ["AUDIT_MODEL"] = model_name
 
-    with clone_repository(repo_url.strip()) as repo_path:
-        tools = InspectionTools(repo_path)
-        try:
-            agent = DevOpsAuditAgent(
-                tools=tools,
-                model=model_name,
-                max_iterations=max_iter,
-                step_callback=_step_cb,
-            )
-        except TypeError:
-            agent = DevOpsAuditAgent(
-                tools=tools,
-                model=model_name,
-                max_iterations=max_iter,
-            )
-            agent.step_callback = _step_cb
+    try:
+        with clone_repository(repo_url.strip()) as repo_path:
+            tools = InspectionTools(repo_path)
+            try:
+                agent = DevOpsAuditAgent(
+                    tools=tools,
+                    model=model_name,
+                    max_iterations=max_iter,
+                    step_callback=trace_step,
+                )
+            except TypeError:
+                agent = DevOpsAuditAgent(
+                    tools=tools,
+                    model=model_name,
+                    max_iterations=max_iter,
+                )
+                agent.step_callback = trace_step
 
-        try:
-            return agent.run(repo_url=repo_url.strip(), step_callback=_step_cb)
-        except TypeError:
-            return agent.run(repo_url=repo_url.strip())
+            try:
+                report = agent.run(repo_url=repo_url.strip(), step_callback=trace_step)
+            except TypeError:
+                report = agent.run(repo_url=repo_url.strip())
+
+            status_box.update(label="Audit Complete! ✅", state="complete", expanded=False)
+            return report
+    except Exception as exc:
+        err_msg = str(exc).lower()
+        if any(
+            k in err_msg
+            for k in ["rate limit", "429", "resource_exhausted", "quota", "too many requests"]
+        ):
+            status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
+        else:
+            status_box.update(label="Audit Failed ❌", state="error", expanded=True)
+        raise
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -205,26 +255,26 @@ with st.sidebar:
     )
     model = default_model
 
-    # Clamp default iterations for public runs:
-    # Default is 8 on community quota. Unlock up to 15 only if user supplies their own key.
+    # ReAct iterations configuration:
+    # Default is 10 on community quota. Unlock up to 20 when user supplies their own key.
     user_supplied_key = bool(override_key.strip()) if default_api_key else bool(active_api_key)
     if user_supplied_key:
         max_iters = st.slider(
             "Max ReAct Iterations",
-            min_value=3,
-            max_value=15,
-            value=10,
-            help="Custom Gemini API Key detected: Unlocked up to 15 iterations.",
+            min_value=5,
+            max_value=20,
+            value=12,
+            help="Custom Gemini API Key detected: Unlocked up to 20 iterations.",
         )
     else:
         max_iters = st.slider(
             "Max ReAct Iterations",
-            min_value=3,
-            max_value=8,
-            value=8,
+            min_value=5,
+            max_value=12,
+            value=10,
             help=(
-                "Clamped to 8 iterations on community quota. "
-                "Supply your own API key to unlock up to 15."
+                "Community quota: Default 10 iterations for thorough inspection. "
+                "Supply your own API key to unlock up to 20."
             ),
         )
 
@@ -283,55 +333,21 @@ if st.button("🚀 Start Audit", type="primary", use_container_width=True):
             "or enter an override key in the sidebar."
         )
     else:
-        status_box = st.status("Auditing repository...", expanded=True)
         try:
-            status_box.write("📥 Checking repository commit SHA...")
             commit_sha = get_remote_head_commit(repo_url.strip())
-            if commit_sha:
-                status_box.write(f"📌 Target Commit SHA: `{commit_sha[:8]}`")
-            status_box.write("🧠 Initializing ReAct loop and inspection sandbox...")
-
-            def trace_step(fn_name: str, fn_args: dict[str, Any]) -> None:
-                if fn_name == "list_files":
-                    sub = fn_args.get("sub_dir")
-                    if sub:
-                        status_box.write(f"Executing: list_files(sub_dir='{sub}')")
-                    else:
-                        status_box.write("Executing: list_files()")
-                elif fn_name == "read_file":
-                    p = fn_args.get("file_path") or fn_args.get("path") or ""
-                    status_box.write(f"Inspecting: {p}")
-                elif fn_name == "search_code":
-                    pat = str(fn_args.get("pattern", ""))
-                    cred_words = ["secret", "key", "token", "password", "aws", "cred"]
-                    if any(w in pat.lower() for w in cred_words):
-                        status_box.write("Running regex pattern search for credentials...")
-                    else:
-                        snippet = (pat[:35] + "...") if len(pat) > 35 else pat
-                        status_box.write(f"Running regex pattern search: `{snippet}`")
-                elif fn_name == "git_log":
-                    status_box.write("Inspecting git commit history: git_log()")
-                elif fn_name == "submit_audit_report":
-                    status_box.write("Validating findings against Pydantic V2 contract...")
-                else:
-                    status_box.write(f"Executing: {fn_name}()")
-
             report = run_cached_audit(
                 repo_url=repo_url.strip(),
                 model_name=model,
                 max_iter=max_iters,
                 api_key=active_api_key,
                 commit_hash=commit_sha,
-                _step_cb=trace_step,
             )
 
-            status_box.update(label="Audit Complete! ✅", state="complete", expanded=False)
             st.session_state["active_report"] = report
             target_info = f"{repo_url.strip()}" + (f" ({commit_sha[:8]})" if commit_sha else "")
             st.session_state["report_source"] = f"Live Audit: {target_info}"
 
         except ResourceExhausted:
-            status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
             st.error(
                 "Default community API quota exhausted for today. "
                 "Get a free Gemini API key in 10 seconds at aistudio.google.com/apikey "
@@ -339,7 +355,6 @@ if st.button("🚀 Start Audit", type="primary", use_container_width=True):
             )
             st.stop()
         except RateLimitError:
-            status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
             st.error(
                 "Default community API quota exhausted for today. "
                 "Get a free Gemini API key in 10 seconds at aistudio.google.com/apikey "
@@ -352,7 +367,6 @@ if st.button("🚀 Start Audit", type="primary", use_container_width=True):
                 k in err_msg.lower()
                 for k in ["rate limit", "429", "resource_exhausted", "quota", "too many requests"]
             ):
-                status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
                 st.error(
                     "Default community API quota exhausted for today. "
                     "Get a free Gemini API key in 10 seconds at aistudio.google.com/apikey "
@@ -360,7 +374,6 @@ if st.button("🚀 Start Audit", type="primary", use_container_width=True):
                 )
                 st.stop()
             else:
-                status_box.update(label="Audit Failed ❌", state="error")
                 st.error(f"Error during audit: {exc}")
 
 
