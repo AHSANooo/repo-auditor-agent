@@ -102,3 +102,16 @@ def test_agent_invokes_step_callback():
     assert len(steps) == 2
     assert steps[0][0] == "list_files"
     assert steps[1][0] == "submit_audit_report"
+
+
+def test_agent_kwargs_backwards_compatible():
+    """Verify that DevOpsAuditAgent handles extra or missing kwargs without raising TypeError."""
+    mock_tools = MagicMock()
+    mock_client = MagicMock()
+    agent = DevOpsAuditAgent(
+        tools=mock_tools,
+        model="mock-model",
+        client=mock_client,
+        extra_unknown_param="safe",
+    )
+    assert agent.model == "mock-model"

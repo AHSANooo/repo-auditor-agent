@@ -70,12 +70,13 @@ class DevOpsAuditAgent:
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         client: OpenAI | None = None,
         step_callback: Any = None,
+        **kwargs: Any,
     ) -> None:
         self.tools = tools
         self.model = model
         self.max_iterations = max_iterations
         self.client = client or self._build_client()
-        self.step_callback = step_callback
+        self.step_callback = step_callback or kwargs.get("step_callback")
         self._iteration_count = 0
 
     @staticmethod
@@ -327,19 +328,25 @@ class DevOpsAuditAgent:
                 break
         return messages
 
-    def run(self, repo_url: str, step_callback: Any = None) -> dict[str, Any]:
+    def run(
+        self,
+        repo_url: str,
+        step_callback: Any = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """
         Execute the full ReAct audit loop.
 
         Args:
             repo_url:      The URL of the repository being audited (for the report).
             step_callback: Optional callable(fn_name, fn_args) to trace live tool execution.
+            **kwargs:      Extra keyword arguments for backwards compatibility.
 
         Returns:
             A JSON-serialisable dict matching the AuditReport schema.
         """
         self._iteration_count = 0
-        cb = step_callback if step_callback is not None else self.step_callback
+        cb = step_callback if step_callback is not None else getattr(self, "step_callback", None)
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},

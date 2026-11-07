@@ -10,6 +10,7 @@ Deploy for free:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -20,7 +21,17 @@ from typing import Any
 import streamlit as st
 
 # Ensure src is on sys.path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+src_path = str(Path(__file__).parent / "src")
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+if "devops_auditor.agent" in sys.modules:
+    try:
+        import devops_auditor.agent
+
+        importlib.reload(devops_auditor.agent)
+    except Exception:  # noqa: S110, BLE001
+        pass
 
 try:
     from dotenv import load_dotenv
@@ -134,13 +145,25 @@ def run_cached_audit(
 
     with clone_repository(repo_url.strip()) as repo_path:
         tools = InspectionTools(repo_path)
-        agent = DevOpsAuditAgent(
-            tools=tools,
-            model=model_name,
-            max_iterations=max_iter,
-            step_callback=_step_cb,
-        )
-        return agent.run(repo_url=repo_url.strip(), step_callback=_step_cb)
+        try:
+            agent = DevOpsAuditAgent(
+                tools=tools,
+                model=model_name,
+                max_iterations=max_iter,
+                step_callback=_step_cb,
+            )
+        except TypeError:
+            agent = DevOpsAuditAgent(
+                tools=tools,
+                model=model_name,
+                max_iterations=max_iter,
+            )
+            agent.step_callback = _step_cb
+
+        try:
+            return agent.run(repo_url=repo_url.strip(), step_callback=_step_cb)
+        except TypeError:
+            return agent.run(repo_url=repo_url.strip())
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
