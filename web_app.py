@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 
@@ -26,6 +28,22 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+try:
+    from google.api_core.exceptions import ResourceExhausted
+except ImportError:
+
+    class ResourceExhausted(Exception):  # type: ignore[no-redef] # noqa: N818
+        pass
+
+
+try:
+    from openai import RateLimitError
+except ImportError:
+
+    class RateLimitError(Exception):  # type: ignore[no-redef] # noqa: N818
+        pass
+
 
 try:
     from devops_auditor.agent import DevOpsAuditAgent
@@ -76,10 +94,60 @@ if os.environ.get("OPENAI_BASE_URL"):
 if os.environ.get("AUDIT_MODEL"):
     default_model = os.environ.get("AUDIT_MODEL", "").strip()
 
+
+def get_remote_head_commit(repo_url: str, timeout: int = 6) -> str:
+    """Fetch the latest commit SHA from the remote git repository without a full clone."""
+    try:
+        res = subprocess.run(
+            ["git", "ls-remote", repo_url.strip(), "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            parts = res.stdout.strip().split()
+            if parts:
+                return parts[0]
+    except Exception:  # noqa: S110, BLE001
+        pass
+    return ""
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def run_cached_audit(
+    repo_url: str,
+    model_name: str,
+    max_iter: int,
+    api_key: str,
+    commit_hash: str = "",
+    _step_cb: Any = None,
+) -> dict[str, Any]:
+    """
+    Execute repository audit with Streamlit native caching by repo URL and commit hash.
+
+    Identical targets hit cache and avoid LLM invocation within 24h.
+    """
+    os.environ["OPENAI_API_KEY"] = api_key
+    os.environ["OPENAI_BASE_URL"] = default_base_url
+    os.environ["AUDIT_MODEL"] = model_name
+
+    with clone_repository(repo_url.strip()) as repo_path:
+        tools = InspectionTools(repo_path)
+        agent = DevOpsAuditAgent(
+            tools=tools,
+            model=model_name,
+            max_iterations=max_iter,
+            step_callback=_step_cb,
+        )
+        return agent.run(repo_url=repo_url.strip(), step_callback=_step_cb)
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Configuration")
 
+    override_key = ""
     if default_api_key:
         st.success("🔒 Default Gemini API Key configured in Secrets")
         override_key = st.text_input(
@@ -114,12 +182,74 @@ with st.sidebar:
     )
     model = default_model
 
-    max_iters = st.slider("Max ReAct Iterations", min_value=5, max_value=30, value=15)
+    # Clamp default iterations for public runs:
+    # Default is 8 on community quota. Unlock up to 15 only if user supplies their own key.
+    user_supplied_key = bool(override_key.strip()) if default_api_key else bool(active_api_key)
+    if user_supplied_key:
+        max_iters = st.slider(
+            "Max ReAct Iterations",
+            min_value=3,
+            max_value=15,
+            value=10,
+            help="Custom Gemini API Key detected: Unlocked up to 15 iterations.",
+        )
+    else:
+        max_iters = st.slider(
+            "Max ReAct Iterations",
+            min_value=3,
+            max_value=8,
+            value=8,
+            help=(
+                "Clamped to 8 iterations on community quota. "
+                "Supply your own API key to unlock up to 15."
+            ),
+        )
 
+    st.divider()
+    st.markdown("### 🛡️ Safe Sandbox Notice")
+    notice = (
+        "`Clones with --depth 1, path traversal validation enabled, zero code execution on server`"
+    )
+    st.caption(notice)
+
+
+# ── Main UI ───────────────────────────────────────────────────────────────────
 repo_url = st.text_input(
     "Public GitHub Repository URL",
     placeholder="https://github.com/pallets/flask",
 )
+
+st.markdown("##### ⚡ Instant Sample Audits (Zero API tokens consumed):")
+col_demo1, col_demo2, col_clear = st.columns([1.2, 1.2, 0.8])
+
+with col_demo1:
+    if st.button("🧪 Vulnerable Repo Demo (10 Flaws)", use_container_width=True):
+        sample_path = Path(__file__).parent / "vulnerable_repo_report.json"
+        if not sample_path.exists():
+            sample_path = Path(__file__).parent / "sample_report.json"
+        with open(sample_path, encoding="utf-8") as f:
+            st.session_state["active_report"] = json.load(f)
+            st.session_state["report_source"] = (
+                "Pre-loaded Demo: Deliberately Vulnerable Repository (10 Flaws)"
+            )
+        st.rerun()
+
+with col_demo2:
+    if st.button("🌶️ Pallets / Flask Demo (Clean)", use_container_width=True):
+        sample_path = Path(__file__).parent / "flask_report.json"
+        with open(sample_path, encoding="utf-8") as f:
+            st.session_state["active_report"] = json.load(f)
+            st.session_state["report_source"] = "Pre-loaded Demo: pallets/flask"
+        st.rerun()
+
+with col_clear:
+    has_report = bool(st.session_state.get("active_report"))
+    if has_report and st.button("🔄 Reset View", use_container_width=True):
+        st.session_state.pop("active_report", None)
+        st.session_state.pop("report_source", None)
+        st.rerun()
+
+st.write("")
 
 if st.button("🚀 Start Audit", type="primary", use_container_width=True):
     if not repo_url.strip():
@@ -130,73 +260,152 @@ if st.button("🚀 Start Audit", type="primary", use_container_width=True):
             "or enter an override key in the sidebar."
         )
     else:
-        os.environ["OPENAI_API_KEY"] = active_api_key
-        os.environ["OPENAI_BASE_URL"] = default_base_url
-        os.environ["AUDIT_MODEL"] = model
-
         status_box = st.status("Auditing repository...", expanded=True)
         try:
-            status_box.write("📥 Cloning repository (shallow clone)...")
-            with clone_repository(repo_url.strip()) as repo_path:
-                status_box.write("🧠 Initializing ReAct loop and inspection sandbox...")
-                tools = InspectionTools(repo_path)
-                agent = DevOpsAuditAgent(tools=tools, model=model, max_iterations=max_iters)
-                status_box.write("🔍 Autonomous investigation in progress across 8 audit areas...")
-                report = agent.run(repo_url=repo_url.strip())
+            status_box.write("📥 Checking repository commit SHA...")
+            commit_sha = get_remote_head_commit(repo_url.strip())
+            if commit_sha:
+                status_box.write(f"📌 Target Commit SHA: `{commit_sha[:8]}`")
+            status_box.write("🧠 Initializing ReAct loop and inspection sandbox...")
 
-            status_box.update(label="Audit Complete! ✅", state="complete", expanded=False)
+            def trace_step(fn_name: str, fn_args: dict[str, Any]) -> None:
+                if fn_name == "list_files":
+                    sub = fn_args.get("sub_dir")
+                    if sub:
+                        status_box.write(f"Executing: list_files(sub_dir='{sub}')")
+                    else:
+                        status_box.write("Executing: list_files()")
+                elif fn_name == "read_file":
+                    p = fn_args.get("file_path") or fn_args.get("path") or ""
+                    status_box.write(f"Inspecting: {p}")
+                elif fn_name == "search_code":
+                    pat = str(fn_args.get("pattern", ""))
+                    cred_words = ["secret", "key", "token", "password", "aws", "cred"]
+                    if any(w in pat.lower() for w in cred_words):
+                        status_box.write("Running regex pattern search for credentials...")
+                    else:
+                        snippet = (pat[:35] + "...") if len(pat) > 35 else pat
+                        status_box.write(f"Running regex pattern search: `{snippet}`")
+                elif fn_name == "git_log":
+                    status_box.write("Inspecting git commit history: git_log()")
+                elif fn_name == "submit_audit_report":
+                    status_box.write("Validating findings against Pydantic V2 contract...")
+                else:
+                    status_box.write(f"Executing: {fn_name}()")
 
-            violations = report.get("violations", [])
-            st.subheader(f"📊 Audit Results ({len(violations)} Violations Found)")
-
-            col1, col2, col3, col4 = st.columns(4)
-            criticals = sum(1 for v in violations if v.get("severity") == "critical")
-            highs = sum(1 for v in violations if v.get("severity") == "high")
-            mediums = sum(1 for v in violations if v.get("severity") == "medium")
-            lows = sum(1 for v in violations if v.get("severity") == "low")
-
-            col1.metric("Critical", criticals)
-            col2.metric("High", highs)
-            col3.metric("Medium", mediums)
-            col4.metric("Low", lows)
-
-            if not violations:
-                st.success("🎉 No DevOps violations detected! The repository appears clean.")
-            else:
-                for v in violations:
-                    sev = v.get("severity", "low").upper()
-                    badge_color = "🔴" if sev == "CRITICAL" else "🟠" if sev == "HIGH" else "🟡"
-                    with st.expander(
-                        f"{badge_color} [{v.get('rule_id')}] {v.get('description')} ({sev})"
-                    ):
-                        st.markdown(f"**Category:** `{v.get('category')}`")
-                        loc_file = v.get("file") or "N/A"
-                        loc_line = v.get("line") or "N/A"
-                        st.markdown(f"**Location:** `{loc_file}` (Line {loc_line})")
-                        st.markdown(f"**Evidence:**\n```\n{v.get('evidence')}\n```")
-                        st.markdown(f"**Actionable Recommendation:**\n{v.get('recommendation')}")
-
-            # Download report JSON
-            report_json = json.dumps(report, indent=2)
-            st.download_button(
-                label="💾 Download Audit Report (JSON)",
-                data=report_json,
-                file_name="audit_report.json",
-                mime="application/json",
+            report = run_cached_audit(
+                repo_url=repo_url.strip(),
+                model_name=model,
+                max_iter=max_iters,
+                api_key=active_api_key,
+                commit_hash=commit_sha,
+                _step_cb=trace_step,
             )
 
+            status_box.update(label="Audit Complete! ✅", state="complete", expanded=False)
+            st.session_state["active_report"] = report
+            target_info = f"{repo_url.strip()}" + (f" ({commit_sha[:8]})" if commit_sha else "")
+            st.session_state["report_source"] = f"Live Audit: {target_info}"
+
+        except ResourceExhausted:
+            status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
+            st.error(
+                "Default community API quota exhausted for today. "
+                "Get a free Gemini API key in 10 seconds at aistudio.google.com/apikey "
+                "and paste it into the sidebar."
+            )
+            st.stop()
+        except RateLimitError:
+            status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
+            st.error(
+                "Default community API quota exhausted for today. "
+                "Get a free Gemini API key in 10 seconds at aistudio.google.com/apikey "
+                "and paste it into the sidebar."
+            )
+            st.stop()
         except Exception as exc:
-            status_box.update(label="Audit Failed ❌", state="error")
             err_msg = str(exc)
             if any(
                 k in err_msg.lower()
                 for k in ["rate limit", "429", "resource_exhausted", "quota", "too many requests"]
             ):
+                status_box.update(label="API Quota Exhausted ⚠️", state="error", expanded=True)
                 st.error(
-                    "⚠️ **Gemini API Quota / Rate Limit Exceeded**\n\n"
-                    "The shared default API key has reached its request quota. "
-                    "Please provide an alternative Gemini API Key in the sidebar under "
-                    "**'Session Gemini API Key (Override)'** to resume auditing."
+                    "Default community API quota exhausted for today. "
+                    "Get a free Gemini API key in 10 seconds at aistudio.google.com/apikey "
+                    "and paste it into the sidebar."
                 )
+                st.stop()
             else:
+                status_box.update(label="Audit Failed ❌", state="error")
                 st.error(f"Error during audit: {exc}")
+
+
+# ── Render Dual-View Output ───────────────────────────────────────────────────
+if "active_report" in st.session_state and st.session_state["active_report"]:
+    report = st.session_state["active_report"]
+    violations = report.get("violations", [])
+    report_source = st.session_state.get("report_source", report.get("repository", "Audit"))
+
+    st.markdown("---")
+    st.subheader(f"📊 Audit Results: {report_source}")
+
+    tab_visual, tab_raw = st.tabs(["📊 Visual Report", "📄 Raw Contract"])
+
+    with tab_visual:
+        col1, col2, col3, col4 = st.columns(4)
+        criticals = sum(1 for v in violations if v.get("severity") == "critical")
+        highs = sum(1 for v in violations if v.get("severity") == "high")
+        mediums = sum(1 for v in violations if v.get("severity") == "medium")
+        lows = sum(1 for v in violations if v.get("severity") == "low")
+
+        col1.metric("Critical 🔴", criticals)
+        col2.metric("High 🟠", highs)
+        col3.metric("Medium 🟡", mediums)
+        col4.metric("Low 🔵", lows)
+
+        total_findings = len(violations)
+        st.markdown(
+            f"**Total Findings:** `{total_findings}` violation(s) detected "
+            "across 9 DevOps audit categories."
+        )
+
+        if not violations:
+            st.success("🎉 No DevOps violations detected! The repository appears clean.")
+        else:
+            for v in violations:
+                sev = str(v.get("severity", "low")).upper()
+                if sev == "CRITICAL":
+                    badge = "🔴"
+                elif sev == "HIGH":
+                    badge = "🟠"
+                elif sev == "MEDIUM":
+                    badge = "🟡"
+                else:
+                    badge = "🔵"
+
+                exp_title = f"{badge} [{v.get('rule_id')}] {v.get('description')} ({sev})"
+                with st.expander(exp_title, expanded=(sev in ["CRITICAL", "HIGH"])):
+                    st.markdown(
+                        f"**Rule ID:** `{v.get('rule_id')}` | "
+                        f"**Category:** `{v.get('category')}` | "
+                        f"**Severity:** `{sev}`"
+                    )
+                    loc_file = v.get("file") or "Repository root / structure"
+                    loc_line = f"Line {v.get('line')}" if v.get("line") is not None else "N/A"
+                    st.markdown(f"**Location:** `{loc_file}` ({loc_line})")
+                    st.markdown("**Evidence:**")
+                    st.code(v.get("evidence", "No evidence recorded"), language="text")
+                    st.markdown(f"**Actionable Recommendation:**\n{v.get('recommendation')}")
+
+    with tab_raw:
+        st.markdown("Validated Pydantic V2 Schema Output:")
+        report_json_str = json.dumps(report, indent=2)
+        st.code(report_json_str, language="json")
+
+        st.download_button(
+            label="Download report.json",
+            data=report_json_str,
+            file_name="report.json",
+            mime="application/json",
+        )

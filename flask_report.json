@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/pallets/flask",
+  "violations": [
+    {
+      "rule_id": "BUILD-001",
+      "category": "build_and_release",
+      "severity": "low",
+      "file": "Dockerfile",
+      "line": null,
+      "description": "No Dockerfile or container specification found in repository root",
+      "evidence": "File 'Dockerfile' or 'compose.yaml' absent from repository root.",
+      "recommendation": "Consider adding an official multi-stage Dockerfile or .devcontainer setup for consistent local containerized reproduction."
+    },
+    {
+      "rule_id": "DEP-001",
+      "category": "dependency_management",
+      "severity": "low",
+      "file": "pyproject.toml",
+      "line": 35,
+      "description": "Core dependencies specify minimum versions without an immutable lockfile",
+      "evidence": "dependencies = [\"Werkzeug>=3.1.0\", \"Jinja2>=3.1.2\", \"itsdangerous>=2.1.2\", \"click>=8.1.3\", \"blinker>=1.6.2\"]",
+      "recommendation": "Acceptable for libraries; maintain an audited lockfile (e.g. requirements.lock or uv.lock) in CI to ensure fully reproducible CI test runs."
+    }
+  ]
+}
+

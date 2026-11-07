@@ -60,6 +60,7 @@ class DevOpsAuditAgent:
         model:          LLM model identifier (default from AUDIT_MODEL env var).
         max_iterations: Maximum ReAct iterations before forced termination.
         client:         Optional pre-configured OpenAI client (useful for testing).
+        step_callback:  Optional callback fn(tool_name, args) called before each tool.
     """
 
     def __init__(
@@ -68,11 +69,13 @@ class DevOpsAuditAgent:
         model: str = DEFAULT_MODEL,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         client: OpenAI | None = None,
+        step_callback: Any = None,
     ) -> None:
         self.tools = tools
         self.model = model
         self.max_iterations = max_iterations
         self.client = client or self._build_client()
+        self.step_callback = step_callback
         self._iteration_count = 0
 
     @staticmethod
@@ -324,17 +327,19 @@ class DevOpsAuditAgent:
                 break
         return messages
 
-    def run(self, repo_url: str) -> dict[str, Any]:
+    def run(self, repo_url: str, step_callback: Any = None) -> dict[str, Any]:
         """
         Execute the full ReAct audit loop.
 
         Args:
-            repo_url: The URL of the repository being audited (for the report).
+            repo_url:      The URL of the repository being audited (for the report).
+            step_callback: Optional callable(fn_name, fn_args) to trace live tool execution.
 
         Returns:
             A JSON-serialisable dict matching the AuditReport schema.
         """
         self._iteration_count = 0
+        cb = step_callback if step_callback is not None else self.step_callback
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -421,6 +426,12 @@ class DevOpsAuditAgent:
                     logger.error("Failed to parse tool arguments JSON: %s", exc)
 
                 logger.info("Tool call: %s(%s)", fn_name, list(fn_args.keys()))
+
+                if cb is not None:
+                    try:
+                        cb(fn_name, fn_args)
+                    except Exception as cb_exc:
+                        logger.debug("step_callback raised: %s", cb_exc)
 
                 # ── Terminal: Submit Audit Report ────────────────────────────
                 if fn_name == "submit_audit_report":
